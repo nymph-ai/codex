@@ -35,8 +35,19 @@ impl ChatWidget {
             ServerRequest::ToolRequestUserInput { params, .. } => {
                 self.on_request_user_input(params);
             }
-            ServerRequest::DynamicToolCall { .. }
-            | ServerRequest::AttestationGenerate { .. }
+            ServerRequest::DynamicToolCall { params, .. } => {
+                self.on_dynamic_tool_call_started(ThreadItem::DynamicToolCall {
+                    id: params.call_id,
+                    namespace: params.namespace,
+                    tool: params.tool,
+                    arguments: params.arguments,
+                    status: codex_app_server_protocol::DynamicToolCallStatus::InProgress,
+                    content_items: None,
+                    success: None,
+                    duration_ms: None,
+                });
+            }
+            ServerRequest::AttestationGenerate { .. }
             | ServerRequest::ChatgptAuthTokensRefresh { .. }
             | ServerRequest::ApplyPatchApproval { .. }
             | ServerRequest::ExecCommandApproval { .. } => {

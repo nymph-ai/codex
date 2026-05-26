@@ -312,6 +312,7 @@ impl ChatWidget {
             ThreadItem::ImageGeneration { .. } => {
                 self.on_image_generation_begin();
             }
+            item @ ThreadItem::DynamicToolCall { .. } => self.on_dynamic_tool_call_started(item),
             ThreadItem::CollabAgentToolCall {
                 id,
                 tool,

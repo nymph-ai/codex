@@ -9,6 +9,7 @@ use crate::legacy_core::config::ConfigBuilder;
 use crate::session_state::ThreadSessionState;
 use crate::wrapping::word_wrap_lines;
 use codex_app_server_protocol::AskForApproval;
+use codex_app_server_protocol::DynamicToolCallOutputContentItem;
 use codex_app_server_protocol::McpAuthStatus;
 use codex_config::types::McpServerConfig;
 use codex_otel::RuntimeMetricTotals;
@@ -1471,6 +1472,87 @@ fn completed_mcp_tool_call_multiple_outputs_inline_snapshot() {
     let rendered = render_lines(&cell.display_lines(/*width*/ 120)).join("\n");
 
     insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn active_dynamic_tool_call_renders_tool_and_arguments() {
+    let cell = new_active_dynamic_tool_call(
+        "call-dynamic".into(),
+        None,
+        "linear_graphql".into(),
+        json!({
+            "query": "query { viewer { id } }",
+        }),
+        /*animations_enabled*/ false,
+    );
+
+    let rendered = render_lines(&cell.display_lines(/*width*/ 120));
+
+    assert_eq!(
+        rendered,
+        vec!["• Calling linear_graphql({\"query\":\"query { viewer { id } }\"})".to_string()]
+    );
+}
+
+#[test]
+fn completed_dynamic_tool_call_success_renders_output() {
+    let mut cell = new_active_dynamic_tool_call(
+        "call-dynamic".into(),
+        Some("linear".into()),
+        "graphql".into(),
+        json!({
+            "query": "query { viewer { id } }",
+        }),
+        /*animations_enabled*/ false,
+    );
+
+    cell.complete(
+        Duration::from_millis(42),
+        true,
+        vec![DynamicToolCallOutputContentItem::InputText {
+            text: "{\"data\":{\"viewer\":{\"id\":\"user-1\"}}}".into(),
+        }],
+    );
+
+    let rendered = render_lines(&cell.display_lines(/*width*/ 120));
+
+    assert_eq!(
+        rendered,
+        vec![
+            "• Called linear.graphql({\"query\":\"query { viewer { id } }\"}) -> success"
+                .to_string(),
+            "  └ {\"data\": {\"viewer\": {\"id\": \"user-1\"}}}".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn completed_dynamic_tool_call_failure_renders_output() {
+    let mut cell = new_active_dynamic_tool_call(
+        "call-dynamic".into(),
+        None,
+        "linear_graphql".into(),
+        json!({ "query": "bad" }),
+        /*animations_enabled*/ false,
+    );
+
+    cell.complete(
+        Duration::from_millis(42),
+        false,
+        vec![DynamicToolCallOutputContentItem::InputText {
+            text: "Linear GraphQL error: field not found".into(),
+        }],
+    );
+
+    let rendered = render_lines(&cell.display_lines(/*width*/ 120));
+
+    assert_eq!(
+        rendered,
+        vec![
+            "• Called linear_graphql({\"query\":\"bad\"}) -> failed".to_string(),
+            "  └ Linear GraphQL error: field not found".to_string(),
+        ]
+    );
 }
 
 #[test]
