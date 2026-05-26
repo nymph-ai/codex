@@ -1475,7 +1475,7 @@ fn completed_mcp_tool_call_multiple_outputs_inline_snapshot() {
 }
 
 #[test]
-fn active_dynamic_tool_call_renders_tool_and_arguments() {
+fn active_dynamic_tool_call_snapshot() {
     let cell = new_active_dynamic_tool_call(
         "call-dynamic".into(),
         None,
@@ -1486,16 +1486,13 @@ fn active_dynamic_tool_call_renders_tool_and_arguments() {
         /*animations_enabled*/ false,
     );
 
-    let rendered = render_lines(&cell.display_lines(/*width*/ 120));
+    let rendered = render_lines(&cell.display_lines(/*width*/ 120)).join("\n");
 
-    assert_eq!(
-        rendered,
-        vec!["• Calling linear_graphql({\"query\":\"query { viewer { id } }\"})".to_string()]
-    );
+    insta::assert_snapshot!(rendered);
 }
 
 #[test]
-fn completed_dynamic_tool_call_success_renders_output() {
+fn completed_dynamic_tool_call_success_snapshot() {
     let mut cell = new_active_dynamic_tool_call(
         "call-dynamic".into(),
         Some("linear".into()),
@@ -1514,20 +1511,13 @@ fn completed_dynamic_tool_call_success_renders_output() {
         }],
     );
 
-    let rendered = render_lines(&cell.display_lines(/*width*/ 120));
+    let rendered = render_lines(&cell.display_lines(/*width*/ 120)).join("\n");
 
-    assert_eq!(
-        rendered,
-        vec![
-            "• Called linear.graphql({\"query\":\"query { viewer { id } }\"}) -> success"
-                .to_string(),
-            "  └ {\"data\": {\"viewer\": {\"id\": \"user-1\"}}}".to_string(),
-        ]
-    );
+    insta::assert_snapshot!(rendered);
 }
 
 #[test]
-fn completed_dynamic_tool_call_failure_renders_output() {
+fn completed_dynamic_tool_call_failure_snapshot() {
     let mut cell = new_active_dynamic_tool_call(
         "call-dynamic".into(),
         None,
@@ -1544,15 +1534,9 @@ fn completed_dynamic_tool_call_failure_renders_output() {
         }],
     );
 
-    let rendered = render_lines(&cell.display_lines(/*width*/ 120));
+    let rendered = render_lines(&cell.display_lines(/*width*/ 120)).join("\n");
 
-    assert_eq!(
-        rendered,
-        vec![
-            "• Called linear_graphql({\"query\":\"bad\"}) -> failed".to_string(),
-            "  └ Linear GraphQL error: field not found".to_string(),
-        ]
-    );
+    insta::assert_snapshot!(rendered);
 }
 
 #[test]

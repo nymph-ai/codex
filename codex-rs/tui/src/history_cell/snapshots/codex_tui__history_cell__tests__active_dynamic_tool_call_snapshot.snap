@@ -1,0 +1,6 @@
+---
+source: tui/src/history_cell/tests.rs
+assertion_line: 1429
+expression: rendered
+---
+• Calling linear_graphql({"query":"query { viewer { id } }"})
