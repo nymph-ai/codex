@@ -1,0 +1,7 @@
+---
+source: tui/src/history_cell/tests.rs
+assertion_line: 1477
+expression: rendered
+---
+• Called linear_graphql({"query":"bad"}) -> failed
+  └ Linear GraphQL error: field not found

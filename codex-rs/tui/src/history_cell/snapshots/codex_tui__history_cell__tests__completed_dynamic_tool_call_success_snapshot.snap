@@ -1,0 +1,7 @@
+---
+source: tui/src/history_cell/tests.rs
+assertion_line: 1454
+expression: rendered
+---
+• Called linear.graphql({"query":"query { viewer { id } }"}) -> success
+  └ {"data": {"viewer": {"id": "user-1"}}}
