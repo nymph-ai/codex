@@ -103,11 +103,8 @@ impl HistoryCell for DynamicToolCallCell {
 
         let mut compact_spans = vec![bullet.clone(), " ".into(), header_text.bold(), " ".into()];
         let mut compact_header = Line::from(compact_spans.clone());
-        let reserved = compact_header.width()
-            + status_suffix
-                .as_ref()
-                .map(|suffix| suffix.width())
-                .unwrap_or_default();
+        let reserved =
+            compact_header.width() + status_suffix.as_ref().map(Line::width).unwrap_or_default();
         let inline_invocation =
             invocation_line.width() <= (width as usize).saturating_sub(reserved);
 
@@ -214,11 +211,12 @@ fn format_dynamic_tool_invocation<'a>(
     let invocation = plain_dynamic_tool_invocation(namespace.as_deref(), &tool, arguments);
     let args_start = invocation.find('(').unwrap_or(invocation.len());
     let args_end = invocation.len().saturating_sub(1);
-    let mut invocation_spans: Vec<Span<'a>> = Vec::new();
-    invocation_spans.push(invocation[..args_start].to_string().cyan());
-    invocation_spans.push("(".into());
-    invocation_spans.push(invocation[args_start + 1..args_end].to_string().dim());
-    invocation_spans.push(")".into());
+    let invocation_spans: Vec<Span<'a>> = vec![
+        invocation[..args_start].to_string().cyan(),
+        "(".into(),
+        invocation[args_start + 1..args_end].to_string().dim(),
+        ")".into(),
+    ];
     invocation_spans.into()
 }
 
