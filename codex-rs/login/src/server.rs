@@ -25,9 +25,10 @@ use std::thread;
 use std::time::Duration;
 
 use crate::auth::AuthDotJson;
-use crate::auth::load_auth_dot_json;
+use crate::auth::CliAuthKeyringBackendKind;
+use crate::auth::load_auth_dot_json_with_keyring_backend_kind;
 use crate::auth::revoke_auth_tokens;
-use crate::auth::save_auth;
+use crate::auth::save_auth_with_keyring_backend_kind;
 use crate::auth::should_revoke_auth_tokens;
 use crate::default_client::originator;
 use crate::pkce::PkceCodes;
@@ -72,6 +73,7 @@ pub struct ServerOptions {
     pub forced_chatgpt_workspace_id: Option<Vec<String>>,
     pub codex_streamlined_login: bool,
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
+    pub cli_auth_keyring_backend_kind: CliAuthKeyringBackendKind,
 }
 
 impl ServerOptions {
@@ -92,7 +94,16 @@ impl ServerOptions {
             forced_chatgpt_workspace_id,
             codex_streamlined_login: false,
             cli_auth_credentials_store_mode,
+            cli_auth_keyring_backend_kind: CliAuthKeyringBackendKind::default(),
         }
+    }
+
+    pub fn with_cli_auth_keyring_backend_kind(
+        mut self,
+        cli_auth_keyring_backend_kind: CliAuthKeyringBackendKind,
+    ) -> Self {
+        self.cli_auth_keyring_backend_kind = cli_auth_keyring_backend_kind;
+        self
     }
 }
 
@@ -362,6 +373,7 @@ async fn process_request(
                         tokens.access_token.clone(),
                         tokens.refresh_token.clone(),
                         opts.cli_auth_credentials_store_mode,
+                        opts.cli_auth_keyring_backend_kind,
                     )
                     .await
                     {
@@ -793,11 +805,16 @@ pub(crate) async fn persist_tokens_async(
     access_token: String,
     refresh_token: String,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
+    keyring_backend_kind: CliAuthKeyringBackendKind,
 ) -> io::Result<()> {
     // Reuse existing synchronous logic but run it off the async runtime.
     let codex_home = codex_home.to_path_buf();
     let (previous_auth, auth) = tokio::task::spawn_blocking(move || {
-        let previous_auth = match load_auth_dot_json(&codex_home, auth_credentials_store_mode) {
+        let previous_auth = match load_auth_dot_json_with_keyring_backend_kind(
+            &codex_home,
+            auth_credentials_store_mode,
+            keyring_backend_kind,
+        ) {
             Ok(auth) => auth,
             Err(err) => {
                 warn!("failed to load previous auth before saving new login: {err}");
@@ -823,7 +840,12 @@ pub(crate) async fn persist_tokens_async(
             last_refresh: Some(Utc::now()),
             agent_identity: None,
         };
-        save_auth(&codex_home, &auth, auth_credentials_store_mode)?;
+        save_auth_with_keyring_backend_kind(
+            &codex_home,
+            &auth,
+            auth_credentials_store_mode,
+            keyring_backend_kind,
+        )?;
         Ok::<_, io::Error>((previous_auth, auth))
     })
     .await
@@ -1171,6 +1193,7 @@ mod tests {
     use wiremock::matchers::path;
 
     use crate::auth::AuthDotJson;
+    use crate::auth::CliAuthKeyringBackendKind;
     use crate::auth::REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR;
     use crate::auth::load_auth_dot_json;
     use crate::auth::save_auth;
@@ -1227,6 +1250,7 @@ mod tests {
             "new-access".to_string(),
             "new-refresh".to_string(),
             AuthCredentialsStoreMode::File,
+            CliAuthKeyringBackendKind::Direct,
         )
         .await?;
 
@@ -1287,6 +1311,7 @@ mod tests {
             "new-access".to_string(),
             "shared-refresh".to_string(),
             AuthCredentialsStoreMode::File,
+            CliAuthKeyringBackendKind::Direct,
         )
         .await?;
 

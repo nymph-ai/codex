@@ -39,10 +39,11 @@ async fn refresh_without_id_token() {
     )
     .expect("failed to write auth file");
 
-    let storage = create_auth_storage(
+    let storage = create_auth_storage(AuthStorageConfig::new(
         codex_home.path().to_path_buf(),
         AuthCredentialsStoreMode::File,
-    );
+        CliAuthKeyringBackendKind::default(),
+    ));
     let updated = super::persist_tokens(
         &storage,
         /*id_token*/ None,
@@ -211,6 +212,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
+        CliAuthKeyringBackendKind::Direct,
     )
     .await
     .unwrap()
@@ -267,6 +269,7 @@ async fn loads_api_key_from_auth_json() {
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
+        CliAuthKeyringBackendKind::Direct,
     )
     .await
     .unwrap()
@@ -344,6 +347,7 @@ async fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
+        CliAuthKeyringBackendKind::Direct,
     )
     .await
     .expect("load auth")
@@ -362,6 +366,7 @@ async fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
         updated_auth_dot_json,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
+        CliAuthKeyringBackendKind::Direct,
     )
     .await
     .expect("updated auth should parse");
@@ -663,6 +668,7 @@ async fn build_config(
     AuthConfig {
         codex_home: codex_home.to_path_buf(),
         auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+        keyring_backend_kind: CliAuthKeyringBackendKind::Direct,
         forced_login_method,
         forced_chatgpt_workspace_id,
         chatgpt_base_url: None,
@@ -745,6 +751,7 @@ async fn load_auth_reads_access_token_from_env() {
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         Some(&chatgpt_base_url),
+        CliAuthKeyringBackendKind::Direct,
     )
     .await
     .expect("env auth should load")
@@ -776,6 +783,7 @@ async fn load_auth_keeps_codex_api_key_env_precedence() {
         /*enable_codex_api_key_env*/ true,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
+        CliAuthKeyringBackendKind::Direct,
     )
     .await
     .expect("env auth should load")
@@ -946,6 +954,7 @@ async fn enforce_login_restrictions_logs_out_for_agent_identity_workspace_mismat
     let config = AuthConfig {
         codex_home: codex_home.path().to_path_buf(),
         auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+        keyring_backend_kind: CliAuthKeyringBackendKind::Direct,
         forced_login_method: None,
         forced_chatgpt_workspace_id: Some(vec![WORKSPACE_ID_ALLOWED.to_string()]),
         chatgpt_base_url: Some(chatgpt_base_url),
@@ -1184,6 +1193,7 @@ async fn plan_type_maps_known_plan() {
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
+        CliAuthKeyringBackendKind::Direct,
     )
     .await
     .expect("load auth")
@@ -1212,6 +1222,7 @@ async fn plan_type_maps_self_serve_business_usage_based_plan() {
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
+        CliAuthKeyringBackendKind::Direct,
     )
     .await
     .expect("load auth")
@@ -1243,6 +1254,7 @@ async fn plan_type_maps_enterprise_cbp_usage_based_plan() {
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
+        CliAuthKeyringBackendKind::Direct,
     )
     .await
     .expect("load auth")
@@ -1274,6 +1286,7 @@ async fn plan_type_maps_unknown_to_unknown() {
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
+        CliAuthKeyringBackendKind::Direct,
     )
     .await
     .expect("load auth")
@@ -1302,6 +1315,7 @@ async fn missing_plan_type_maps_to_unknown() {
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
+        CliAuthKeyringBackendKind::Direct,
     )
     .await
     .expect("load auth")
