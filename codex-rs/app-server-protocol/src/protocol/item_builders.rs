@@ -118,7 +118,7 @@ pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> Thread
     let aggregated_output = if payload.aggregated_output.is_empty() {
         None
     } else {
-        Some(payload.aggregated_output.clone())
+        Some(clip_client_display_field(payload.aggregated_output.clone()))
     };
     let duration_ms = i64::try_from(payload.duration.as_millis()).unwrap_or(i64::MAX);
     let command_actions = command_actions_for_path_uri(&payload.parsed_cmd, &payload.cwd);
@@ -331,7 +331,7 @@ pub fn convert_patch_changes(changes: &HashMap<PathBuf, FileChange>) -> Vec<File
         .map(|(path, change)| FileUpdateChange {
             path: path.to_string_lossy().into_owned(),
             kind: map_patch_change_kind(change),
-            diff: format_file_change_diff(change),
+            diff: clip_client_display_field(format_file_change_diff(change)),
         })
         .collect();
     converted.sort_by(|a, b| a.path.cmp(&b.path));
@@ -346,6 +346,38 @@ fn map_patch_change_kind(change: &FileChange) -> PatchChangeKind {
             move_path: move_path.clone(),
         },
     }
+}
+
+const CLIENT_DISPLAY_FIELD_MAX_BYTES: usize = 256 * 1024;
+
+/// Head+tail truncate a client display field (command output, a file diff) on
+/// char boundaries so one huge item cannot produce a multi-megabyte app-server
+/// protocol frame. Codex already caps other UI-facing fields (e.g.
+/// `ERROR_MESSAGE_UI_MAX_BYTES`). The model still gets its own separately
+/// truncated view and the full text stays in the on-disk rollout; this only
+/// trims the display projection sent to clients.
+fn clip_client_display_field(text: String) -> String {
+    if text.len() <= CLIENT_DISPLAY_FIELD_MAX_BYTES {
+        return text;
+    }
+    let keep = CLIENT_DISPLAY_FIELD_MAX_BYTES / 2;
+    let mut head_end = keep.min(text.len());
+    while head_end > 0 && !text.is_char_boundary(head_end) {
+        head_end -= 1;
+    }
+    let mut tail_start = text.len().saturating_sub(keep);
+    while tail_start < text.len() && !text.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
+    if tail_start <= head_end {
+        return text;
+    }
+    let elided = tail_start - head_end;
+    format!(
+        "{}\n\n\u{2026} [{elided} bytes elided by the app-server display cap; full output is in the thread's on-disk rollout] \u{2026}\n\n{}",
+        &text[..head_end],
+        &text[tail_start..],
+    )
 }
 
 fn format_file_change_diff(change: &FileChange) -> String {
