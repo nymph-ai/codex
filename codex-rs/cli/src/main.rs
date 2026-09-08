@@ -1,3 +1,6 @@
+// MCP's bounded catalog refresh adds a future layer to the CLI dispatch graph.
+#![recursion_limit = "256"]
+
 use clap::Args;
 use clap::CommandFactory;
 use clap::Parser;
