@@ -9,6 +9,75 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 #[test]
+fn client_display_cap_preserves_unicode_ends_and_full_source_events() {
+    let full = "界".repeat(100_000);
+    let expected = format!(
+        "{}\n\n… [37860 bytes elided by the app-server display cap; full output is in the thread's on-disk rollout] …\n\n{}",
+        "界".repeat(43_690),
+        "界".repeat(43_690),
+    );
+    let event = ExecCommandEndEvent {
+        call_id: "capped-command".into(),
+        plugin_id: None,
+        script_path: None,
+        process_id: None,
+        turn_id: "turn".into(),
+        completed_at_ms: 1_000,
+        command: vec!["example".into()],
+        cwd: PathUri::parse("file:///repo").unwrap(),
+        parsed_cmd: vec![],
+        source: ExecCommandSource::Agent,
+        interaction_input: None,
+        stdout: full.clone(),
+        stderr: String::new(),
+        aggregated_output: full.clone(),
+        exit_code: 0,
+        duration: std::time::Duration::from_millis(12),
+        formatted_output: full.clone(),
+        status: codex_protocol::protocol::ExecCommandStatus::Completed,
+    };
+    let ThreadItem::CommandExecution {
+        aggregated_output, ..
+    } = build_command_execution_end_item(&event)
+    else {
+        panic!("expected command item");
+    };
+    assert_eq!(aggregated_output, Some(expected.clone()));
+    assert_eq!(event.aggregated_output, full);
+    assert_eq!(event.formatted_output, full);
+    for change in [
+        FileChange::Add {
+            content: full.clone(),
+        },
+        FileChange::Delete {
+            content: full.clone(),
+        },
+        FileChange::Update {
+            unified_diff: full.clone(),
+            move_path: None,
+        },
+    ] {
+        let changes = HashMap::from([(PathBuf::from("large.txt"), change)]);
+        assert_eq!(convert_patch_changes(&changes)[0].diff, expected);
+        assert_eq!(
+            format_file_change_diff(&changes[&PathBuf::from("large.txt")]),
+            full
+        );
+    }
+}
+
+#[test]
+fn client_display_cap_leaves_small_and_boundary_sized_text_unchanged() {
+    for text in [
+        String::new(),
+        "small 界".to_string(),
+        "a".repeat(256 * 1024),
+    ] {
+        assert_eq!(clip_client_display_field(text.clone()), text);
+    }
+}
+
+#[test]
 fn read_command_actions_preserve_native_and_foreign_paths() {
     let api_key = "sk-abcdefghijklmnopqrstuvwxyz123456";
     for (cwd_uri, relative_path, expected_path) in [
