@@ -3,6 +3,8 @@ use crate::McpServerExposure;
 use crate::McpServerKey;
 #[path = "connection_manager/network_policy_tests.rs"]
 mod network_policy_tests;
+#[path = "connection_manager/tool_catalog_refresh_tests.rs"]
+mod tool_catalog_refresh_tests;
 use crate::McpBinding;
 use crate::McpServerPermissions;
 use crate::client_tool_catalog::ClientToolCatalog;
@@ -117,6 +119,7 @@ impl McpConnectionSet {
             disabled_servers: Vec::new(),
             required_servers: Vec::new(),
             optional_startup_deadline: OnceLock::new(),
+            tool_catalog_refresh: Mutex::new(HashMap::new()),
             tool_plugin_context: Arc::new(ToolPluginContext::default()),
             prefix_mcp_tool_names,
             non_prefixed_mcp_tool_servers: Vec::new(),
