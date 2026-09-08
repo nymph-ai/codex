@@ -15,6 +15,8 @@ mod startup;
 mod status;
 #[path = "connection_manager/tool_catalog.rs"]
 mod tool_catalog;
+#[path = "connection_manager/tool_catalog_refresh.rs"]
+mod tool_catalog_refresh;
 
 use startup::chatgpt_auth_provider_for_server;
 use startup::emit_update;
@@ -74,6 +76,7 @@ use codex_protocol::protocol::McpStartupFailureReason;
 use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpStartupUpdateEvent;
 use codex_rmcp_client::determine_streamable_http_auth_status_from_credentials;
+use tokio::sync::Mutex;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tracing::warn;
@@ -189,6 +192,7 @@ pub(crate) struct McpConnectionSet {
     disabled_servers: Vec<String>,
     required_servers: Vec<String>,
     optional_startup_deadline: OnceLock<tokio::time::Instant>,
+    tool_catalog_refresh: Mutex<HashMap<String, tool_catalog_refresh::RefreshState>>,
     tool_plugin_context: Arc<ToolPluginContext>,
     prefix_mcp_tool_names: bool,
     non_prefixed_mcp_tool_servers: Vec<String>,
@@ -759,6 +763,7 @@ impl McpConnectionSet {
             disabled_servers,
             required_servers,
             optional_startup_deadline: OnceLock::new(),
+            tool_catalog_refresh: Mutex::new(HashMap::new()),
             tool_plugin_context,
             prefix_mcp_tool_names,
             non_prefixed_mcp_tool_servers,
@@ -817,6 +822,7 @@ impl McpConnectionSet {
             disabled_servers: Vec::new(),
             required_servers: Vec::new(),
             optional_startup_deadline: OnceLock::new(),
+            tool_catalog_refresh: Mutex::new(HashMap::new()),
             tool_plugin_context: Arc::new(ToolPluginContext::default()),
             prefix_mcp_tool_names,
             non_prefixed_mcp_tool_servers: Vec::new(),
