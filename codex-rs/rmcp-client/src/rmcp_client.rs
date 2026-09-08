@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
 use std::sync::PoisonError;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -395,6 +396,7 @@ pub struct CancellableEventStreamRequest {
 /// MCP client implemented on top of the official `rmcp` SDK.
 /// https://github.com/modelcontextprotocol/rust-sdk
 pub struct RmcpClient {
+    tool_list_generation: Arc<AtomicU64>,
     state: Mutex<ClientState>,
     stdio_process: Option<StdioServerProcessHandle>,
     transport_recipe: TransportRecipe,
@@ -419,6 +421,12 @@ impl RmcpClient {
         }
     }
 
+    /// Connection-local invalidation generation, including notices received
+    /// during initialization or a previous catalog fetch.
+    pub fn tool_list_generation(&self) -> u64 {
+        self.tool_list_generation.load(Ordering::Acquire)
+    }
+
     /// Returns the protocol compatibility policy captured when this client was created.
     pub fn protocol_mode(&self) -> McpProtocolMode {
         self.protocol_mode
@@ -433,6 +441,7 @@ impl RmcpClient {
             .map_err(io::Error::other)?;
 
         Ok(Self {
+            tool_list_generation: Arc::new(AtomicU64::new(0)),
             state: Mutex::new(ClientState::Connecting {
                 transport: Some(transport),
             }),
@@ -507,6 +516,7 @@ impl RmcpClient {
         };
 
         Ok(Self {
+            tool_list_generation: Arc::new(AtomicU64::new(0)),
             state: Mutex::new(ClientState::Connecting {
                 transport: Some(transport),
             }),
@@ -610,6 +620,7 @@ impl RmcpClient {
         };
         let transport = Self::create_pending_transport(&transport_recipe).await?;
         Ok(Self {
+            tool_list_generation: Arc::new(AtomicU64::new(0)),
             state: Mutex::new(ClientState::Connecting {
                 transport: Some(transport),
             }),
@@ -1274,6 +1285,7 @@ impl RmcpClient {
             initialize_context.client_info.clone(),
             Box::new(move |id, request| send_elicitation(id, request)),
             self.elicitation_pause_state.clone(),
+            Arc::clone(&self.tool_list_generation),
         );
         let _initialize_deadline = match &self.transport_recipe {
             TransportRecipe::StreamableHttp {
