@@ -415,6 +415,7 @@ pub struct CancellableEventStreamRequest {
 pub struct RmcpClient {
     // Drop our interest in retrying before the SDK transport uses its ordinary shutdown grace.
     stdio_process: Option<StdioProcessSlot>,
+    tool_list_generation: Arc<AtomicU64>,
     state: Mutex<ClientState>,
     transport_recipe: TransportRecipe,
     protocol_mode: McpProtocolMode,
@@ -458,6 +459,12 @@ impl RmcpClient {
         }
     }
 
+    /// Connection-local invalidation generation, including notices received
+    /// during initialization or a previous catalog fetch.
+    pub fn tool_list_generation(&self) -> u64 {
+        self.tool_list_generation.load(Ordering::Acquire)
+    }
+
     /// Returns the protocol compatibility policy captured when this client was created.
     pub fn protocol_mode(&self) -> McpProtocolMode {
         self.protocol_mode
@@ -472,6 +479,7 @@ impl RmcpClient {
             .map_err(io::Error::other)?;
 
         Ok(Self {
+            tool_list_generation: Arc::new(AtomicU64::new(0)),
             state: Mutex::new(ClientState::Connecting {
                 transport: Some(transport),
             }),
@@ -548,6 +556,7 @@ impl RmcpClient {
         };
 
         Ok(Self {
+            tool_list_generation: Arc::new(AtomicU64::new(0)),
             state: Mutex::new(ClientState::Connecting {
                 transport: Some(transport),
             }),
@@ -657,6 +666,7 @@ impl RmcpClient {
         };
         let transport = Self::create_pending_transport(&transport_recipe).await?;
         Ok(Self {
+            tool_list_generation: Arc::new(AtomicU64::new(0)),
             state: Mutex::new(ClientState::Connecting {
                 transport: Some(transport),
             }),
@@ -1569,6 +1579,7 @@ impl RmcpClient {
                 info,
                 Box::new(move |id, request| send_elicitation(id, request)),
                 self.elicitation_pause_state.clone(),
+                Arc::clone(&self.tool_list_generation),
             )
         };
         let _initialize_deadline = match &self.transport_recipe {
