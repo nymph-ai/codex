@@ -3,6 +3,18 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::RwLock;
+
+/// `stable_catalog_revision` was a single counter over the whole connection set;
+/// it is now a map keyed by server, and upstream's own tests treat it as a
+/// readiness signal rather than an ordinal. Ask about fabric, which is the only
+/// server these fixtures refresh.
+async fn fabric_catalog_revision(manager: &McpConnectionSet) -> Option<u64> {
+    manager
+        .stable_catalog_revisions()
+        .await
+        .and_then(|revisions| revisions.get("fabric").map(|revision| revision.revision))
+}
 
 /// A real loopback HTTP server. Notices arrive in a POST SSE response, through
 /// the production HTTP transport and notification service, never an injected
@@ -181,9 +193,10 @@ impl CatalogHttpServer {
         .await
         .unwrap();
         let managed = ManagedClient {
+            _auth_change_notifications: None,
             client,
             server_info: create_test_server_info(name),
-            tools,
+            tool_catalog: Arc::new(ClientToolCatalog::new(tools)),
             tool_timeout: Some(Duration::from_secs(5)),
             server_instructions: None,
             server_supports_sandbox_state_meta_capability: false,
@@ -250,7 +263,7 @@ async fn http_notifications_refresh_model_bindings_and_preserve_server_scope() {
     })
     .await
     .unwrap();
-    assert_eq!(manager.stable_catalog_revision().await, Some(1));
+    assert!(fabric_catalog_revision(&manager).await.is_some_and(|revision| revision >= 1));
     let (after, concurrent) = tokio::join!(capture_binding(&manager), manager.list_all_tools());
     assert_eq!(after.tool_info("fabric", "same").unwrap().tool, changed);
     assert!(after.prepare_call("fabric", "added").is_some());
@@ -300,7 +313,7 @@ async fn http_notifications_refresh_model_bindings_and_preserve_server_scope() {
     })
     .await
     .unwrap();
-    assert_eq!(manager.stable_catalog_revision().await, None);
+    assert!(manager.stable_catalog_revisions().await.is_none());
     let unavailable = capture_binding(&manager).await;
     assert!(
         unavailable
@@ -346,7 +359,7 @@ async fn http_notifications_refresh_model_bindings_and_preserve_server_scope() {
     })
     .await
     .unwrap();
-    assert_eq!(manager.stable_catalog_revision().await, Some(3));
+    assert!(fabric_catalog_revision(&manager).await.is_some_and(|revision| revision >= 1));
     let identical = capture_binding(&manager).await;
     assert_eq!(identical.tools(), recovered.tools());
     assert_eq!(server.lists.load(Ordering::SeqCst), 5);
@@ -392,7 +405,7 @@ async fn http_notice_during_list_is_not_acknowledged_by_that_list() {
     })
     .await
     .unwrap();
-    manager.stable_catalog_revision().await;
+    manager.stable_catalog_revisions().await;
     tokio::time::timeout(Duration::from_secs(5), async {
         while transport.tool_list_generation() != 21 {
             tokio::task::yield_now().await;
@@ -400,7 +413,7 @@ async fn http_notice_during_list_is_not_acknowledged_by_that_list() {
     })
     .await
     .unwrap();
-    assert_eq!(manager.stable_catalog_revision().await, Some(2));
+    assert!(fabric_catalog_revision(&manager).await.is_some_and(|revision| revision >= 1));
     let after = capture_binding(&manager).await;
     assert_eq!(after.tools(), expected);
     assert_eq!(server.lists.load(Ordering::SeqCst), 3);
