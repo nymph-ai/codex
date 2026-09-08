@@ -1,4 +1,6 @@
 use super::*;
+#[path = "connection_manager/tool_catalog_refresh_tests.rs"]
+mod tool_catalog_refresh_tests;
 use crate::McpBinding;
 use crate::elicitation::ElicitationLifecycle;
 use crate::elicitation::ElicitationRequestManager;
@@ -109,6 +111,8 @@ impl McpConnectionSet {
             required_servers: Vec::new(),
             optional_startup_deadline: OnceLock::new(),
             tool_catalog_revision: Arc::new(RwLock::new(0)),
+            tool_catalog_refresh: Mutex::new(HashMap::new()),
+            tool_catalog_overrides: RwLock::new(HashMap::new()),
             codex_apps_tools_override: RwLock::new(None),
             codex_apps_refresh_lock: Mutex::new(()),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
@@ -519,6 +523,7 @@ async fn prepared_call_timeout_includes_trusted_access_lookup() {
         Arc::new(create_test_managed_client(vec![tool.clone()]).await),
         Arc::new(config),
         /*catalog_revision*/ 0,
+        /*tool_list_generation*/ 0,
         Arc::new(RwLock::new(0)),
         tool,
         server_metadata,

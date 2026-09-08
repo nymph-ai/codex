@@ -174,6 +174,7 @@ pub struct PreparedMcpCall {
     client: Arc<ManagedClient>,
     config: Arc<McpConfig>,
     catalog_revision: u64,
+    tool_list_generation: u64,
     catalog_revision_source: Arc<RwLock<u64>>,
     tool_info: ToolInfo,
     server_name: String,
@@ -192,6 +193,7 @@ impl PreparedMcpCall {
         client: Arc<ManagedClient>,
         config: Arc<McpConfig>,
         catalog_revision: u64,
+        tool_list_generation: u64,
         catalog_revision_source: Arc<RwLock<u64>>,
         tool_info: ToolInfo,
         server_metadata: McpServerMetadata,
@@ -205,6 +207,7 @@ impl PreparedMcpCall {
             client,
             config,
             catalog_revision,
+            tool_list_generation,
             catalog_revision_source,
             tool_info,
             server_name,
@@ -326,7 +329,9 @@ impl PreparedMcpCall {
         };
         let tool_name = self.tool_info.tool.name.to_string();
         let current_revision = self.catalog_revision_source.read().await;
-        if *current_revision != self.catalog_revision {
+        if *current_revision != self.catalog_revision
+            || self.client.client.tool_list_generation() != self.tool_list_generation
+        {
             return Err(anyhow::anyhow!(
                 "tool call rejected because the catalog changed after `{}/{tool_name}` was prepared",
                 self.server_name

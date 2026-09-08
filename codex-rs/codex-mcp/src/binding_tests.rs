@@ -114,6 +114,7 @@ async fn test_step(
         managed_client,
         Arc::clone(&config),
         /*catalog_revision*/ 0,
+        /*tool_list_generation*/ 0,
         Arc::clone(&tool_catalog_revision),
         tool.clone(),
         McpServerMetadata {

@@ -56,6 +56,14 @@ pub fn tool_is_model_visible(tool: &ToolInfo) -> bool {
 
 impl McpConnectionSet {
     pub(crate) async fn stable_catalog_revision(&self) -> Option<u64> {
+        if self
+            .refresh_notified_tool_catalogs()
+            .await
+            .values()
+            .any(Option::is_none)
+        {
+            return None;
+        }
         for (server_name, view) in &self.servers {
             if !view
                 .connection
@@ -84,10 +92,15 @@ impl McpConnectionSet {
     /// Returns all tools with model-visible names normalized.
     #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.servers.len()))]
     pub async fn list_all_tools(&self) -> Vec<ToolInfo> {
+        let generations = self.refresh_notified_tool_catalogs().await;
         let mut tools = Vec::new();
         let mut available_server_count = 0;
         let mut unavailable_server_count = 0;
+        let generations = &generations;
         let server_results = join_all(self.servers.iter().map(|(server_name, view)| async move {
+            if generations.get(server_name) == Some(&None) {
+                return None;
+            }
             view.connection.client.reconnect_failed_startup().await;
             let has_cached_tools = view.connection.client.has_cached_tools();
             let startup_complete = view
@@ -98,16 +111,24 @@ impl McpConnectionSet {
             let catalog_override = if server_name == CODEX_APPS_MCP_SERVER_NAME {
                 self.codex_apps_tools_override.read().await.clone()
             } else {
-                None
+                self.tool_catalog_overrides
+                    .read()
+                    .await
+                    .get(server_name)
+                    .cloned()
             };
             let server_tools = async {
                 match catalog_override {
                     Some(tools) => {
                         let tools = filter_tools(tools, &view.tool_filter);
-                        Some(prepare_codex_apps_tools_for_model(
-                            tools,
-                            &self.tool_plugin_provenance,
-                        ))
+                        Some(if server_name == CODEX_APPS_MCP_SERVER_NAME {
+                            prepare_codex_apps_tools_for_model(tools, &self.tool_plugin_provenance)
+                        } else {
+                            crate::rmcp_client::prepare_regular_mcp_tools_for_model(
+                                tools,
+                                &self.tool_plugin_provenance,
+                            )
+                        })
                     }
                     None => view.listed_tools(&self.tool_plugin_provenance).await,
                 }
@@ -171,6 +192,7 @@ impl McpConnectionSet {
         plugins_available: bool,
         required_servers: &[String],
     ) -> McpBinding {
+        let generations = self.refresh_notified_tool_catalogs().await;
         let revision = self.tool_catalog_revision.read().await;
         let mut listed_tools = Vec::new();
         let mut clients = std::collections::HashMap::new();
@@ -241,7 +263,7 @@ impl McpConnectionSet {
             (server_name, view, None)
         }))
         .await;
-        let server_results = join_all(server_snapshots.into_iter().map(|(server_name, view, cached_tools)| async move {
+        let server_results = join_all(server_snapshots.into_iter().filter(|(server_name, _, _)| generations.get(*server_name) != Some(&None)).map(|(server_name, view, cached_tools)| async move {
             let (client, server_tools) = if !view
                 .connection
                 .client
@@ -259,7 +281,7 @@ impl McpConnectionSet {
                 let catalog_override = if server_name == CODEX_APPS_MCP_SERVER_NAME {
                     self.codex_apps_tools_override.read().await.clone()
                 } else {
-                    None
+                    self.tool_catalog_overrides.read().await.get(server_name).cloned()
                 };
                 let server_tools = catalog_override.unwrap_or_else(|| client.tools.clone());
                 (Some(Arc::new(client)), server_tools)
@@ -309,8 +331,18 @@ impl McpConnectionSet {
                 }
                 continue;
             };
-            let Some(call) = self.prepare_call(&tool_info, client, Arc::clone(&config), *revision)
-            else {
+            let generation = generations
+                .get(&tool_info.server_name)
+                .copied()
+                .flatten()
+                .unwrap_or(0);
+            let Some(call) = self.prepare_call(
+                &tool_info,
+                client,
+                Arc::clone(&config),
+                *revision,
+                generation,
+            ) else {
                 trace!(
                     server_name = %tool_info.server_name,
                     tool_name = %tool_info.tool.name,
@@ -345,6 +377,7 @@ impl McpConnectionSet {
         client: Arc<ManagedClient>,
         config: Arc<crate::McpConfig>,
         tool_catalog_revision: u64,
+        tool_list_generation: u64,
     ) -> Option<PreparedMcpCall> {
         let server_name = &tool_info.server_name;
         let view = self.servers.get(server_name)?;
@@ -353,6 +386,7 @@ impl McpConnectionSet {
             client,
             config,
             tool_catalog_revision,
+            tool_list_generation,
             Arc::clone(&self.tool_catalog_revision),
             tool_info.clone(),
             view.metadata.clone(),

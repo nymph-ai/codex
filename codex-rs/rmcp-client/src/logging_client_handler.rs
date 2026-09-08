@@ -1,4 +1,6 @@
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 use rmcp::ClientHandler;
 use rmcp::RoleClient;
@@ -26,13 +28,19 @@ use crate::rmcp_client::SendElicitation;
 pub(crate) struct LoggingClientHandler {
     client_info: ClientInfo,
     send_elicitation: Arc<SendElicitation>,
+    tool_list_generation: Arc<AtomicU64>,
 }
 
 impl LoggingClientHandler {
-    pub(crate) fn new(client_info: ClientInfo, send_elicitation: SendElicitation) -> Self {
+    pub(crate) fn new(
+        client_info: ClientInfo,
+        send_elicitation: SendElicitation,
+        tool_list_generation: Arc<AtomicU64>,
+    ) -> Self {
         Self {
             client_info,
             send_elicitation: Arc::new(send_elicitation),
+            tool_list_generation,
         }
     }
 }
@@ -84,6 +92,9 @@ impl ClientHandler for LoggingClientHandler {
     }
 
     async fn on_tool_list_changed(&self, _context: NotificationContext<RoleClient>) {
+        // Do not make a nested request from the notification dispatcher. Consumers
+        // coalesce generations and refresh over this connection at catalog capture.
+        self.tool_list_generation.fetch_add(1, Ordering::Release);
         info!("MCP server tool list changed");
     }
 

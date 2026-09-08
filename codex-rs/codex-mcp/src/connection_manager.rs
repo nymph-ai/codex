@@ -15,6 +15,8 @@ mod startup;
 mod status;
 #[path = "connection_manager/tool_catalog.rs"]
 mod tool_catalog;
+#[path = "connection_manager/tool_catalog_refresh.rs"]
+mod tool_catalog_refresh;
 
 use startup::chatgpt_auth_provider_for_server;
 use startup::emit_update;
@@ -191,6 +193,8 @@ pub(crate) struct McpConnectionSet {
     required_servers: Vec<String>,
     optional_startup_deadline: OnceLock<tokio::time::Instant>,
     tool_catalog_revision: Arc<RwLock<u64>>,
+    tool_catalog_refresh: Mutex<HashMap<String, tool_catalog_refresh::RefreshState>>,
+    tool_catalog_overrides: RwLock<HashMap<String, Vec<ToolInfo>>>,
     codex_apps_tools_override: RwLock<Option<Vec<ToolInfo>>>,
     codex_apps_refresh_lock: Mutex<()>,
     tool_plugin_provenance: Arc<ToolPluginProvenance>,
@@ -712,6 +716,8 @@ impl McpConnectionSet {
             required_servers,
             optional_startup_deadline: OnceLock::new(),
             tool_catalog_revision: Arc::new(RwLock::new(0)),
+            tool_catalog_refresh: Mutex::new(HashMap::new()),
+            tool_catalog_overrides: RwLock::new(HashMap::new()),
             codex_apps_tools_override: RwLock::new(None),
             codex_apps_refresh_lock: Mutex::new(()),
             tool_plugin_provenance,
@@ -774,6 +780,8 @@ impl McpConnectionSet {
             required_servers: Vec::new(),
             optional_startup_deadline: OnceLock::new(),
             tool_catalog_revision: Arc::new(RwLock::new(0)),
+            tool_catalog_refresh: Mutex::new(HashMap::new()),
+            tool_catalog_overrides: RwLock::new(HashMap::new()),
             codex_apps_tools_override: RwLock::new(None),
             codex_apps_refresh_lock: Mutex::new(()),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
