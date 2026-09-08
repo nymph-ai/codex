@@ -173,6 +173,11 @@ pub struct PreparedMcpCall {
     client: Arc<ManagedClient>,
     config: Arc<McpConfig>,
     catalog_revision: u64,
+    /// The connection's tool-list generation when this call was prepared. A
+    /// notification advances it whether or not the refresh it triggers
+    /// publishes, so it is what invalidates a call prepared before that
+    /// notification.
+    tool_list_generation: u64,
     tool_info: ToolInfo,
     server_name: String,
     server_metadata: McpServerMetadata,
@@ -197,11 +202,13 @@ impl PreparedMcpCall {
     ) -> Option<Self> {
         let server_name = tool_info.server_name.clone();
         config.permission_profile_for_server(&server_name)?;
+        let tool_list_generation = client.client.tool_list_generation();
         Some(Self {
             connections,
             client,
             config,
             catalog_revision,
+            tool_list_generation,
             tool_info,
             server_name,
             server_metadata,
@@ -317,6 +324,16 @@ impl PreparedMcpCall {
             (server_timeout, requested_timeout) => server_timeout.or(requested_timeout),
         };
         let tool_name = self.tool_info.tool.name.to_string();
+        // ClientToolCatalog::refresh returns before advancing its revision when
+        // the fetch fails, so on its own the revision would let a call run
+        // against a catalog the server has already told us changed. The
+        // connection's generation advances on every notification.
+        if self.tool_list_generation != self.client.client.tool_list_generation() {
+            return Err(anyhow::anyhow!(
+                "tool call rejected because the catalog changed after `{}/{tool_name}` was prepared",
+                self.server_name
+            ));
+        }
         self.client
             .tool_catalog
             .run_with_revision(self.catalog_revision, || async {
