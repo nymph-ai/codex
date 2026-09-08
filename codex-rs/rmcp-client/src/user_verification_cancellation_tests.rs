@@ -351,6 +351,7 @@ async fn ordinary_elicitations_release_pending_responses_on_cancellation() -> an
                 Box::pin(async move { Ok(response_rx.await?) })
             }),
             pause_state,
+            std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         );
         let (client_transport, server_transport) = tokio::io::duplex(/*max_buf_size*/ 4096);
         let client = serve_directly(service, client_transport, /*peer_info*/ None);
@@ -504,6 +505,7 @@ async fn user_verification_service_cancellation_drops_pending_response() -> anyh
             Box::pin(async move { Ok(response_rx.await?) })
         }),
         pause_state,
+        std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
     );
     let (client_transport, server_transport) = tokio::io::duplex(/*max_buf_size*/ 4096);
     let client = serve_directly(service, client_transport, /*peer_info*/ None);
@@ -563,6 +565,7 @@ async fn cancelling_one_verification_leaves_the_mcp_connection_and_other_request
             Box::pin(async move { Ok(response_rx.await?) })
         }),
         pause_state,
+        std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
     );
     let (client_transport, server_transport) = tokio::io::duplex(/*max_buf_size*/ 4096);
     let client = serve_directly(service, client_transport, /*peer_info*/ None);
