@@ -63,6 +63,14 @@ impl McpConnectionSet {
         &self,
     ) -> Option<HashMap<String, ClientToolCatalogRevision>> {
         let mut revisions = HashMap::new();
+        if self
+            .refresh_notified_tool_catalogs()
+            .await
+            .values()
+            .any(Option::is_none)
+        {
+            return None;
+        }
         for (server_name, view) in &self.servers {
             if !view
                 .connection
@@ -175,10 +183,22 @@ impl McpConnectionSet {
         required_servers: &[String],
         required_plugins: &HashSet<String>,
     ) -> McpBinding {
+        // Notified catalogs are refreshed before their revisions are captured.
+        let refreshed = self.refresh_notified_tool_catalogs().await;
         let mut listed_tools = Vec::new();
         let mut clients = HashMap::new();
         let optional_mcp_startup_grace = config.optional_mcp_startup_grace;
-        let server_snapshots = join_all(self.servers.iter().map(|(server_name, view)| async move {
+        // A server whose refresh did not complete is left out of the new binding
+        // rather than served from its previous catalog: a notification means its
+        // tool set changed, so the previous set may grant access the server has
+        // since withdrawn. Servers absent from the map -- one with no ready
+        // transport, or the Codex Apps catalog, which refreshes on its own path
+        // -- keep their place.
+        let live_servers = self
+            .servers
+            .iter()
+            .filter(|(server_name, _)| refreshed.get(*server_name) != Some(&None));
+        let server_snapshots = join_all(live_servers.map(|(server_name, view)| async move {
             if !view
                 .connection
                 .client

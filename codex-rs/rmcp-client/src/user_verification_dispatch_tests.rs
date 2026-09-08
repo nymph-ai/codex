@@ -24,6 +24,7 @@ fn service() -> ElicitationClientService {
         info,
         Box::new(|_, _| panic!("cancelled or malformed verification must not reach the UI")),
         ElicitationPauseState::new(),
+        std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
     )
 }
 
