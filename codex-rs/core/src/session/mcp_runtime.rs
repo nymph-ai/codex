@@ -351,7 +351,36 @@ impl Session {
             .environment_cwds
             .entry(codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string())
             .or_insert_with(|| PathUri::from_abs_path(&desired.config.cwd));
-        let mcp_servers = effective_mcp_servers(&config, auth.as_ref());
+        // Session-owned local MCP connectors opt in through env_vars. Resolve
+        // the thread from this runtime, never from the daemon's inherited env
+        // (which can name the thread that happened to launch the daemon).
+        // Materialize before connection identity/caching so two threads cannot
+        // share a connector that carries one thread's native authority.
+        let mut configured = codex_mcp::configured_mcp_servers(&config);
+        for server in configured.values_mut() {
+            if !server.is_local_environment() {
+                continue;
+            }
+            if let McpServerTransportConfig::Stdio { env, env_vars, .. } = &mut server.transport
+                && env_vars
+                    .iter()
+                    .any(|var| var.name() == "CODEX_THREAD_ID" && !var.is_remote_source())
+            {
+                let env = env.get_or_insert_with(Default::default);
+                env.insert("CODEX_THREAD_ID".to_string(), self.thread_id().to_string());
+                if env_vars
+                    .iter()
+                    .any(|var| var.name() == "CODEX_HOME" && !var.is_remote_source())
+                {
+                    env.insert(
+                        "CODEX_HOME".to_string(),
+                        config.codex_home.display().to_string(),
+                    );
+                }
+            }
+        }
+        let mcp_servers =
+            codex_mcp::effective_mcp_servers_from_configured(configured, &config, auth.as_ref());
         config.set_server_permission_profiles(
             &mcp_servers,
             desired.environments.turn_environments().map(|environment| {
