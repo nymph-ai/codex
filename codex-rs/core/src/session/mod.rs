@@ -334,7 +334,6 @@ use codex_history::InitialHistory;
 pub(crate) use codex_history::PreviousTurnSettings;
 use codex_history::ResponseItemEnvelope;
 use codex_mcp::McpConfig;
-use codex_mcp::effective_mcp_servers;
 use codex_otel::SessionTelemetry;
 use codex_otel::THREAD_STARTED_METRIC;
 use codex_otel::TelemetryAuthMode;
