@@ -106,7 +106,7 @@ impl Session {
         mcp_config.host_cwd = environments
             .local_environment_cwd()
             .unwrap_or_else(|| config.cwd.clone());
-        Self::bind_mcp_server_environments(
+        self.bind_mcp_server_environments(
             &mut mcp_config,
             config,
             &environments,
