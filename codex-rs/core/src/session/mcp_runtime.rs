@@ -287,6 +287,7 @@ impl Session {
 
     /// Freezes the same environment and permission inputs for status reads and runtime publication.
     pub(super) fn bind_mcp_server_environments(
+        &self,
         config: &mut McpConfig,
         settings: &Config,
         environments: &TurnEnvironmentSnapshot,
@@ -325,7 +326,11 @@ impl Session {
                 cfg!(windows)
                     && settings.effective_local_windows_sandbox_type() == SandboxType::WindowsMxc,
             );
-        let mcp_servers = effective_mcp_servers(config, auth);
+        let mut mcp_servers = effective_mcp_servers(config, auth);
+        let thread_id = self.thread_id().to_string();
+        for server in mcp_servers.values_mut() {
+            server.bind_local_stdio_thread(&thread_id, &config.codex_home);
+        }
         config.set_server_permissions(
             &mcp_servers,
             environments.turn_environments().map(|environment| {
@@ -357,7 +362,7 @@ impl Session {
             selected_plugins: _,
         } = mcp_projection;
         config.host_cwd = desired.config.cwd.clone();
-        let mcp_servers = Self::bind_mcp_server_environments(
+        let mcp_servers = self.bind_mcp_server_environments(
             &mut config,
             &desired.config,
             &desired.environments,

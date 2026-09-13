@@ -86,6 +86,27 @@ impl EffectiveMcpServer {
         &self.config
     }
 
+    /// Bind local stdio connectors that opt in to a specific Codex thread.
+    pub fn bind_local_stdio_thread(&mut self, thread_id: &str, codex_home: &std::path::Path) {
+        if !self.config.is_local_environment() {
+            return;
+        }
+        if let McpServerTransportConfig::Stdio { env, env_vars, .. } = &mut self.config.transport
+            && env_vars
+                .iter()
+                .any(|var| var.name() == "CODEX_THREAD_ID" && !var.is_remote_source())
+        {
+            let env = env.get_or_insert_with(Default::default);
+            env.insert("CODEX_THREAD_ID".to_string(), thread_id.to_string());
+            if env_vars
+                .iter()
+                .any(|var| var.name() == "CODEX_HOME" && !var.is_remote_source())
+            {
+                env.insert("CODEX_HOME".to_string(), codex_home.display().to_string());
+            }
+        }
+    }
+
     /// Checks whether Core can discover the protocol of a local stdio server.
     ///
     /// The reserved `codex_apps` server has a per-chat catalog. Servers with runtime or
