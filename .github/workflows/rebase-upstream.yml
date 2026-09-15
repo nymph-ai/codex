@@ -86,28 +86,19 @@ jobs:
 
       - name: Report Rebase Failure
         if: failure()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.target.outputs.tag }}"
           COMMIT="${{ steps.rebase.outputs.conflicted_commit }}"
           FILES="${{ steps.rebase.outputs.conflicted_files }}"
-          TITLE="Upstream Rebase Conflict for ${TAG}"
-          BODY=$(cat <<EOD
-Automated rebase of \`fabric-patchset\` onto upstream tag \`${TAG}\` encountered merge conflicts.
-
-- **Conflicted Commit**: \`${COMMIT}\`
-- **Conflicted Files**: \`${FILES}\`
-
-### Diagnostic Notes
-Upstream \`${TAG}\` refactored internal MCP / rmcp-client / Guardian modules, which conflicts with Fabric's notified catalog refresh and thread binding patches.
-
-Please review the conflicts in a dedicated worktree and update \`fabric-patchset\`.
-EOD
-)
-          EXISTING=$(gh issue list --repo "${{ github.repository }}" --state open --search "in:title \"${TITLE}\"" --json number --jq '.[0].number // empty')
-          if [ -n "${EXISTING}" ]; then
-            gh issue comment "${EXISTING}" --repo "${{ github.repository }}" --body "${BODY}"
-          else
-            gh issue create --repo "${{ github.repository }}" --title "${TITLE}" --label "bug" --body "${BODY}"
-          fi
+          {
+            echo "## Upstream rebase conflict for ${TAG}"
+            echo
+            echo "Automated rebase of fabric-patchset onto upstream tag ${TAG} hit merge conflicts."
+            echo
+            echo "- conflicted commit: ${COMMIT}"
+            echo "- conflicted files: ${FILES}"
+            echo
+            echo "Resolve them in a worktree and update fabric-patchset; the manual protocol is in"
+            echo "fabric/harnesses/codex-sync.md in the monorepo."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error title=Upstream rebase conflict::${TAG} conflicts at ${COMMIT} in ${FILES}"
