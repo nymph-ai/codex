@@ -7,6 +7,8 @@ on:
         required: false
         type: string
         default: ""
+  repository_dispatch:
+    types: [rebase-upstream]
 
 jobs:
   rebase:
@@ -35,7 +37,7 @@ jobs:
       - name: Determine Target Tag
         id: target
         run: |
-          INPUT_TAG="${{ github.event.inputs.target_tag }}"
+          INPUT_TAG="${{ github.event.inputs.target_tag || github.event.client_payload.target_tag }}"
           if [ -n "${INPUT_TAG}" ]; then
             TAG="${INPUT_TAG}"
           else
