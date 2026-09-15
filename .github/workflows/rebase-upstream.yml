@@ -1,0 +1,106 @@
+name: Rebase Upstream
+on:
+  workflow_dispatch:
+    inputs:
+      target_tag:
+        description: "Target upstream release tag (e.g. rust-v0.154.0)"
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  rebase:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "NymphAI Fork Sync Bot"
+          git config user.email "bot@nymphai.internal"
+
+      - name: Fetch Upstream Tags and Branches
+        run: |
+          git remote add upstream https://github.com/openai/codex.git || true
+          git fetch upstream --tags --quiet
+          git fetch origin fabric-patchset:refs/remotes/origin/fabric-patchset --quiet
+
+      - name: Determine Target Tag
+        id: target
+        run: |
+          INPUT_TAG="${{ github.event.inputs.target_tag }}"
+          if [ -n "${INPUT_TAG}" ]; then
+            TAG="${INPUT_TAG}"
+          else
+            TAG=$(git tag -l "rust-v*" --sort=-v:refname | grep -v 'alpha' | grep -v 'rc' | head -n 1)
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Selected target tag: ${TAG}"
+
+      - name: Attempt Rebase of Fabric Patchset
+        id: rebase
+        run: |
+          TAG="${{ steps.target.outputs.tag }}"
+          echo "Checking out candidate branch for ${TAG}..."
+          git checkout -B "candidate/${TAG}" "refs/tags/${TAG}"
+
+          echo "Attempting cherry-pick of origin/fabric-patchset commits..."
+          COMMITS=$(git rev-list --reverse origin/fabric-patchset ^3d2ee51ca2d5db578f328aa75e20aa22c0197c9a)
+          
+          CONFLICT=0
+          for COMMIT in ${COMMITS}; do
+            echo "Applying ${COMMIT}..."
+            if ! git cherry-pick "${COMMIT}"; then
+              echo "Conflict applying ${COMMIT}!"
+              CONFLICT=1
+              break
+            fi
+          done
+
+          if [ "${CONFLICT}" -eq 0 ]; then
+            echo "Rebase succeeded without conflicts!"
+            echo "conflict=false" >> "$GITHUB_OUTPUT"
+            git push -u origin "candidate/${TAG}" --force-with-lease
+          else
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+            echo "conflicted_commit=${COMMIT}" >> "$GITHUB_OUTPUT"
+            CONFLICTED_FILES=$(git diff --name-only --diff-filter=U | tr '\n' ' ')
+            echo "conflicted_files=${CONFLICTED_FILES}" >> "$GITHUB_OUTPUT"
+            git cherry-pick --abort || true
+            exit 1
+          fi
+
+      - name: Report Rebase Failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.target.outputs.tag }}"
+          COMMIT="${{ steps.rebase.outputs.conflicted_commit }}"
+          FILES="${{ steps.rebase.outputs.conflicted_files }}"
+          TITLE="Upstream Rebase Conflict for ${TAG}"
+          BODY=$(cat <<EOD
+Automated rebase of \`fabric-patchset\` onto upstream tag \`${TAG}\` encountered merge conflicts.
+
+- **Conflicted Commit**: \`${COMMIT}\`
+- **Conflicted Files**: \`${FILES}\`
+
+### Diagnostic Notes
+Upstream \`${TAG}\` refactored internal MCP / rmcp-client / Guardian modules, which conflicts with Fabric's notified catalog refresh and thread binding patches.
+
+Please review the conflicts in a dedicated worktree and update \`fabric-patchset\`.
+EOD
+)
+          EXISTING=$(gh issue list --repo "${{ github.repository }}" --state open --search "in:title \"${TITLE}\"" --json number --jq '.[0].number // empty')
+          if [ -n "${EXISTING}" ]; then
+            gh issue comment "${EXISTING}" --repo "${{ github.repository }}" --body "${BODY}"
+          else
+            gh issue create --repo "${{ github.repository }}" --title "${TITLE}" --label "bug" --body "${BODY}"
+          fi
