@@ -59,7 +59,7 @@ jobs:
           git checkout -B "candidate/${TAG}" "refs/tags/${TAG}"
 
           echo "Attempting cherry-pick of origin/fabric-patchset commits..."
-          COMMITS=$(git rev-list --reverse origin/fabric-patchset ^3d2ee51ca2d5db578f328aa75e20aa22c0197c9a)
+          COMMITS=$(git rev-list --reverse origin/fabric-patchset ^6b9826e3aa83b1a5947db50f4332cb9c65f1b340)
           
           CONFLICT=0
           for COMMIT in ${COMMITS}; do
