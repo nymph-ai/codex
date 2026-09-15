@@ -1,3 +1,8 @@
+# NOTE: this file was re-committed on 2026-09-15 to force GitHub to re-register
+# the workflow. PR #2 added the repository_dispatch and workflow_dispatch triggers,
+# but the registered workflow object kept the revision from PR #1 (on: push only),
+# so POST /dispatches returned 204 and started nothing. A change to this file on the
+# default branch is what makes GitHub re-read the trigger set.
 name: Rebase Upstream
 on:
   workflow_dispatch:
