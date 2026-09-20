@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       target_tag:
-        description: "Target upstream release tag (e.g. rust-v0.154.0)"
+        description: "Target upstream release tag (e.g. rust-v0.155.1)"
         required: false
         type: string
         default: ""
@@ -59,7 +59,7 @@ jobs:
           git checkout -B "candidate/${TAG}" "refs/tags/${TAG}"
 
           echo "Attempting cherry-pick of origin/fabric-patchset commits..."
-          COMMITS=$(git rev-list --reverse origin/fabric-patchset ^6b9826e3aa83b1a5947db50f4332cb9c65f1b340)
+          COMMITS=$(git rev-list --reverse origin/fabric-patchset ^4e21628f9ec9ee656650cd2b62ef92225725b5ac)
           
           CONFLICT=0
           for COMMIT in ${COMMITS}; do
