@@ -11,9 +11,17 @@ use tokio::sync::RwLock;
 /// server these fixtures refresh.
 async fn fabric_catalog_revision(manager: &McpConnectionSet) -> Option<u64> {
     manager
-        .stable_catalog_revisions()
+        .stable_catalog_revisions(
+            /*required_servers*/ &[],
+            /*required_plugins*/ &std::collections::HashSet::new(),
+        )
         .await
-        .and_then(|revisions| revisions.get("fabric").map(|revision| revision.revision))
+        .and_then(|revisions| {
+            revisions.get("fabric").map(|revision| match revision {
+                BindingCatalogRevision::Ready(revision) => revision.revision,
+                BindingCatalogRevision::Dormant(revision) => *revision,
+            })
+        })
 }
 
 /// A real loopback HTTP server. Notices arrive in a POST SSE response, through
@@ -196,7 +204,7 @@ impl CatalogHttpServer {
             _auth_change_notifications: None,
             client,
             server_info: create_test_server_info(name),
-            tool_catalog: Arc::new(ClientToolCatalog::new(tools)),
+            tool_catalog: Arc::new(ClientToolCatalog::new(tools, /*updates*/ None)),
             tool_timeout: Some(Duration::from_secs(5)),
             server_instructions: None,
             server_supports_sandbox_state_meta_capability: false,
@@ -317,7 +325,15 @@ async fn http_notifications_refresh_model_bindings_and_preserve_server_scope() {
     })
     .await
     .unwrap();
-    assert!(manager.stable_catalog_revisions().await.is_none());
+    assert!(
+        manager
+            .stable_catalog_revisions(
+                /*required_servers*/ &[],
+                /*required_plugins*/ &std::collections::HashSet::new(),
+            )
+            .await
+            .is_none()
+    );
     let unavailable = capture_binding(&manager).await;
     assert!(
         unavailable
@@ -413,7 +429,12 @@ async fn http_notice_during_list_is_not_acknowledged_by_that_list() {
     })
     .await
     .unwrap();
-    manager.stable_catalog_revisions().await;
+    manager
+        .stable_catalog_revisions(
+            /*required_servers*/ &[],
+            /*required_plugins*/ &std::collections::HashSet::new(),
+        )
+        .await;
     tokio::time::timeout(Duration::from_secs(5), async {
         while transport.tool_list_generation() != 21 {
             tokio::task::yield_now().await;
