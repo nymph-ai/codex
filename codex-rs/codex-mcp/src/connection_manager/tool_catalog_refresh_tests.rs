@@ -263,7 +263,11 @@ async fn http_notifications_refresh_model_bindings_and_preserve_server_scope() {
     })
     .await
     .unwrap();
-    assert!(fabric_catalog_revision(&manager).await.is_some_and(|revision| revision >= 1));
+    assert!(
+        fabric_catalog_revision(&manager)
+            .await
+            .is_some_and(|revision| revision >= 1)
+    );
     let (after, concurrent) = tokio::join!(capture_binding(&manager), manager.list_all_tools());
     assert_eq!(after.tool_info("fabric", "same").unwrap().tool, changed);
     assert!(after.prepare_call("fabric", "added").is_some());
@@ -359,7 +363,11 @@ async fn http_notifications_refresh_model_bindings_and_preserve_server_scope() {
     })
     .await
     .unwrap();
-    assert!(fabric_catalog_revision(&manager).await.is_some_and(|revision| revision >= 1));
+    assert!(
+        fabric_catalog_revision(&manager)
+            .await
+            .is_some_and(|revision| revision >= 1)
+    );
     let identical = capture_binding(&manager).await;
     assert_eq!(identical.tools(), recovered.tools());
     assert_eq!(server.lists.load(Ordering::SeqCst), 5);
@@ -413,7 +421,11 @@ async fn http_notice_during_list_is_not_acknowledged_by_that_list() {
     })
     .await
     .unwrap();
-    assert!(fabric_catalog_revision(&manager).await.is_some_and(|revision| revision >= 1));
+    assert!(
+        fabric_catalog_revision(&manager)
+            .await
+            .is_some_and(|revision| revision >= 1)
+    );
     let after = capture_binding(&manager).await;
     assert_eq!(after.tools(), expected);
     assert_eq!(server.lists.load(Ordering::SeqCst), 3);
