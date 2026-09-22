@@ -214,6 +214,7 @@ impl CatalogHttpServer {
             client: futures::future::ready(Ok(managed)).boxed().shared(),
             is_codex_apps_mcp_server: false,
             cached_server_info: None,
+            server_capabilities: Arc::new(std::sync::Mutex::new(None)),
             codex_apps_tools_cache_context: None,
             tool_catalog_cache_context: None,
             startup_complete: Arc::new(AtomicBool::new(true)),
@@ -406,7 +407,7 @@ async fn http_notice_during_list_is_not_acknowledged_by_that_list() {
         serde_json::from_value(json!({"url": server.url})).unwrap(),
     ));
     config.mcp_server_catalog = catalog.build();
-    manager.tool_plugin_provenance = Arc::new(crate::tool_plugin_provenance(&config));
+    manager.tool_plugin_context = Arc::new(crate::tool_plugin_context(&config));
     let manager = Arc::new(manager);
     let before = capture_binding(&manager).await;
     let expected = before.tools().to_vec();
