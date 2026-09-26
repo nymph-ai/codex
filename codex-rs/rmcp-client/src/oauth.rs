@@ -86,7 +86,10 @@ pub(crate) use self::refresh_transaction::install_tokens_in_manager;
 pub(crate) use self::resolved_store::ResolvedOAuthCredentialStore;
 pub(crate) use self::resolved_store::ResolvedOAuthTokens;
 pub(crate) use self::resolved_store::resolve_oauth_tokens_from_store_policy;
-use self::resolved_store::try_resolve_oauth_tokens_from_store_policy;
+pub mod daemon_lease;
+pub use daemon_lease::lease_access_token_from_daemon;
+pub use daemon_lease::lease_access_token_from_socket;
+pub use daemon_lease::resolve_daemon_control_socket_path;
 pub(crate) use self::runtime::OAuthRuntime;
 
 const KEYRING_SERVICE: &str = "Codex MCP Credentials";
@@ -309,6 +312,42 @@ pub fn stored_oauth_credential_snapshot(
         resolved.tokens,
         resolved.store,
     )))
+}
+
+/// Refreshes OAuth credentials for a server using its resolved store authority,
+/// rotating the refresh token if needed and returning the resulting tokens.
+#[allow(clippy::too_many_arguments)]
+pub async fn refresh_oauth_tokens(
+    server_name: &str,
+    url: &str,
+    initial_tokens: StoredOAuthTokens,
+    credential_store: ResolvedOAuthCredentialStore,
+    default_headers: http::HeaderMap,
+    http_client: Arc<dyn codex_exec_server::HttpClient>,
+    redirect_mode: crate::http_client_adapter::StreamableHttpRedirectMode,
+    force_refresh: bool,
+) -> Result<StoredOAuthTokens> {
+    let oauth_http_client = Arc::new(crate::oauth_http_client::OAuthHttpClientAdapter::new_with_redirect_mode(
+        http_client.clone(),
+        default_headers.clone(),
+        url,
+        !default_headers.is_empty(),
+        redirect_mode,
+    )?);
+    let mut manager =
+        AuthorizationManager::new_with_oauth_http_client(url.to_string(), oauth_http_client)
+            .await?;
+    manager.set_allow_missing_issuer(true);
+
+    let persistor = OAuthPersistor::new(
+        server_name.to_string(),
+        url.to_string(),
+        Arc::new(Mutex::new(manager)),
+        credential_store,
+        Some(initial_tokens),
+    );
+
+    persistor.refresh_tokens(force_refresh).await
 }
 
 fn oauth_store_is_contended(error: &Error) -> bool {

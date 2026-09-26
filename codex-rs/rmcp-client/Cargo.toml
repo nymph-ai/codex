@@ -16,6 +16,7 @@ axum = { workspace = true, default-features = false, features = [
 ] }
 base64 = { workspace = true }
 codex-api = { workspace = true }
+codex-app-server-protocol = { workspace = true }
 codex-config = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-http-client = { workspace = true }
@@ -24,9 +25,11 @@ codex-network-proxy = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-secrets = { workspace = true }
+codex-uds = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 codex-utils-pty = { workspace = true }
 codex-utils-home-dir = { workspace = true }
+tokio-tungstenite = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true, default-features = false, features = ["std"] }
 http = { workspace = true }

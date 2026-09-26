@@ -4,8 +4,10 @@
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum McpOAuthRefreshMode {
     /// Keep Codex's existing refresh and persistence path.
-    #[default]
     Legacy,
     /// Let RMCP coordinate refresh through Codex's credential store.
     Coordinated,
+    /// Centralize OAuth refresh in the long-running app-server daemon and lease access tokens over UDS.
+    #[default]
+    DaemonLease,
 }

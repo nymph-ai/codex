@@ -1802,7 +1802,7 @@ impl Config {
                 && self.mcp_enterprise_managed_auth.is_some(),
             mcp_oauth_credentials_store_mode: self.mcp_oauth_credentials_store_mode,
             oauth_refresh_mode: if self.features.enabled(Feature::McpOAuthRefreshCoordination) {
-                McpOAuthRefreshMode::Coordinated
+                McpOAuthRefreshMode::DaemonLease
             } else {
                 McpOAuthRefreshMode::Legacy
             },

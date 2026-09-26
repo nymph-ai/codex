@@ -38,6 +38,61 @@ impl OAuthPersistor {
             .await
     }
 
+    pub async fn refresh_tokens(&self, force: bool) -> Result<StoredOAuthTokens> {
+        self.refresh_tokens_in(&DefaultKeyringStore, REFRESH_REQUEST_TIMEOUT, force)
+            .await
+    }
+
+    pub(super) async fn refresh_tokens_in<K: KeyringStore + Clone + 'static>(
+        &self,
+        keyring_store: &K,
+        refresh_request_timeout: Duration,
+        force: bool,
+    ) -> Result<StoredOAuthTokens> {
+        let expires_at = {
+            let guard = self.inner.last_credentials.lock().await;
+            guard.as_ref().and_then(|tokens| tokens.expires_at)
+        };
+
+        if !force && !token_needs_refresh(expires_at) {
+            if let Some(tokens) = self.stored_credentials().await {
+                return Ok(tokens);
+            }
+        }
+
+        let persistor = self.clone();
+        let keyring_store = keyring_store.clone();
+        let transaction_task = tokio::spawn(async move {
+            let result = persistor
+                .refresh_transaction_with_policy(&keyring_store, refresh_request_timeout, force)
+                .await;
+
+            if let Err(error) = &result {
+                warn!(
+                    server_name = %persistor.inner.server_name,
+                    refresh_reason = if force { "forced" } else { "expiry" },
+                    error = %error,
+                    "MCP OAuth refresh transaction failed"
+                );
+            }
+
+            result
+        });
+        transaction_task.await.with_context(|| {
+            format!(
+                "OAuth refresh task failed for server {}",
+                self.inner.server_name
+            )
+        })??;
+
+        self.stored_credentials().await.ok_or_else(|| {
+            anyhow::anyhow!(
+                "OAuth credentials missing after refresh for server {}",
+                self.inner.server_name
+            )
+        })
+    }
+
     /// Injects the credential backend and provider timeout for deterministic failure-path tests.
     pub(super) async fn refresh_if_needed_in<K: KeyringStore + Clone + 'static>(
         &self,
@@ -103,6 +158,16 @@ impl OAuthPersistor {
         keyring_store: &K,
         refresh_request_timeout: Duration,
     ) -> Result<()> {
+        self.refresh_transaction_with_policy(keyring_store, refresh_request_timeout, false)
+            .await
+    }
+
+    async fn refresh_transaction_with_policy<K: KeyringStore + Clone + 'static>(
+        &self,
+        keyring_store: &K,
+        refresh_request_timeout: Duration,
+        force: bool,
+    ) -> Result<()> {
         debug!("waiting for the MCP OAuth credential transaction lock");
         let _lock =
             RefreshCredentialLock::acquire_for_server(&self.inner.server_name, &self.inner.url)
@@ -135,7 +200,7 @@ impl OAuthPersistor {
             });
         };
 
-        if !token_needs_refresh(latest.expires_at) {
+        if !force && !token_needs_refresh(latest.expires_at) {
             debug!("adopting newer MCP OAuth credentials without contacting the provider");
             let manager = self.inner.authorization_manager.clone();
             let mut guard = manager.lock().await;

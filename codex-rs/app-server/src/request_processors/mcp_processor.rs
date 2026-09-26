@@ -73,6 +73,15 @@ impl McpRequestProcessor {
             .map(|()| None)
     }
 
+    pub(crate) async fn mcp_get_auth_token(
+        &self,
+        params: McpGetAuthTokenParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.mcp_get_auth_token_response(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn mcp_server_tool_call(
         &self,
         request_id: &ConnectionRequestId,
@@ -81,6 +90,125 @@ impl McpRequestProcessor {
         self.call_mcp_server_tool(request_id, params)
             .await
             .map(|()| None)
+    }
+
+    pub(crate) async fn mcp_get_auth_token_response(
+        &self,
+        params: McpGetAuthTokenParams,
+    ) -> Result<McpGetAuthTokenResponse, JSONRPCErrorError> {
+        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        let auth = self.auth_manager.auth().await;
+        let mcp_config = self
+            .thread_manager
+            .mcp_manager()
+            .runtime_config(&config)
+            .await;
+        let runtime_context = McpRuntimeContext::new(
+            self.thread_manager.environment_manager(),
+            config.cwd.to_path_buf(),
+        );
+        let effective_servers = codex_mcp::effective_mcp_servers(&mcp_config, auth.as_ref());
+        let Some(server) = effective_servers.get(&params.server_name) else {
+            return Err(invalid_request(format!(
+                "No MCP server named '{}' found.",
+                params.server_name
+            )));
+        };
+        let redirect_mode = if server.is_agent_plugin() {
+            StreamableHttpRedirectMode::AgentPluginV1
+        } else {
+            StreamableHttpRedirectMode::Legacy
+        };
+        let server = server.config();
+        let (url, http_headers, env_http_headers) = match &server.transport {
+            McpServerTransportConfig::StreamableHttp {
+                url,
+                http_headers,
+                env_http_headers,
+                ..
+            } => (url.clone(), http_headers.clone(), env_http_headers.clone()),
+            _ => {
+                return Err(invalid_request(
+                    "OAuth auth token leasing is only supported for streamable HTTP servers.",
+                ));
+            }
+        };
+
+        let oauth_credential_name = server.oauth_credential_name(&params.server_name);
+        let snapshot = codex_rmcp_client::stored_oauth_credential_snapshot(
+            oauth_credential_name.as_ref(),
+            &url,
+            mcp_config.mcp_oauth_credentials_store_mode,
+            mcp_config.auth_keyring_backend_kind,
+        )
+        .map_err(|err| internal_error(format!("failed to read stored OAuth credentials: {err}")))?;
+
+        let Some(snapshot) = snapshot else {
+            return Err(invalid_request(format!(
+                "No stored OAuth credentials found for MCP server '{}'. Please log in first.",
+                params.server_name
+            )));
+        };
+
+        let needs_refresh = params.force_refresh
+            || codex_rmcp_client::token_needs_refresh(snapshot.tokens.expires_at);
+
+        if !needs_refresh && snapshot.tokens.access_token_is_usable_without_refresh() {
+            let access_token = snapshot
+                .tokens
+                .token_response
+                .0
+                .access_token()
+                .secret()
+                .to_string();
+            let expires_at = snapshot.tokens.expires_at;
+            return Ok(McpGetAuthTokenResponse {
+                access_token,
+                expires_at,
+            });
+        }
+
+        let http_client = runtime_context
+            .resolve_http_client(&params.server_name, server)
+            .map_err(|err| {
+                internal_error(format!("failed to resolve MCP server runtime: {err}"))
+            })?;
+        let default_headers = codex_rmcp_client::build_default_headers(
+            http_headers,
+            env_http_headers,
+        )
+        .map_err(|err| internal_error(format!("failed to build default headers: {err}")))?;
+
+        let refreshed = codex_rmcp_client::refresh_oauth_tokens(
+            oauth_credential_name.as_ref(),
+            &url,
+            snapshot.tokens,
+            snapshot.store,
+            default_headers,
+            http_client,
+            redirect_mode,
+            params.force_refresh,
+        )
+        .await
+        .map_err(|err| {
+            internal_error(format!(
+                "failed to refresh OAuth tokens for MCP server '{}': {err}",
+                params.server_name
+            ))
+        })?;
+
+        let access_token = refreshed
+            .token_response
+            .0
+            .access_token()
+            .secret()
+            .to_string();
+        let expires_at = refreshed.expires_at;
+
+        Ok(McpGetAuthTokenResponse {
+            access_token,
+            expires_at,
+        })
     }
 
     async fn mcp_server_refresh_response(

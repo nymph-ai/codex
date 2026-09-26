@@ -1625,6 +1625,23 @@ async fn create_oauth_transport_and_runtime(
         .await
         .context("failed to resolve OAuth metadata before using stored credentials")?
         .metadata;
+    if matches!(oauth_refresh_mode, McpOAuthRefreshMode::DaemonLease) {
+        match crate::oauth::daemon_lease::lease_access_token_from_daemon(server_name, false).await {
+            Ok(lease) => {
+                initial_tokens
+                    .token_response
+                    .0
+                    .set_access_token(oauth2::AccessToken::new(lease.access_token));
+                initial_tokens.expires_at = lease.expires_at;
+            }
+            Err(err) => {
+                warn!(
+                    "Failed to lease initial OAuth access token from daemon for MCP server `{server_name}`: {err}; using stored token snapshot"
+                );
+            }
+        }
+    }
+
     let use_stored_access_token_only =
         match validate_refresh_token_issuer(&metadata, &initial_tokens) {
             Ok(()) => false,
@@ -1633,7 +1650,7 @@ async fn create_oauth_transport_and_runtime(
         };
     manager.set_metadata(metadata);
     let mut runtime_tokens = initial_tokens.clone();
-    if use_stored_access_token_only {
+    if use_stored_access_token_only || matches!(oauth_refresh_mode, McpOAuthRefreshMode::DaemonLease) {
         runtime_tokens.token_response.0.set_refresh_token(None);
         runtime_tokens.issuer = None;
     }
@@ -1648,7 +1665,7 @@ async fn create_oauth_transport_and_runtime(
             manager.set_credential_store(store.clone());
             Some(store)
         }
-        McpOAuthRefreshMode::Legacy | McpOAuthRefreshMode::Coordinated => None,
+        McpOAuthRefreshMode::Legacy | McpOAuthRefreshMode::Coordinated | McpOAuthRefreshMode::DaemonLease => None,
     };
 
     let auth_client = AuthClient::new(
@@ -1676,18 +1693,26 @@ async fn create_oauth_transport_and_runtime(
         return Ok(PendingTransport::StreamableHttpWithAccessTokenOnly { transport });
     }
 
-    let runtime = match coordinated_store {
-        Some(store) => OAuthRuntime::Coordinated {
+    let runtime = match oauth_refresh_mode {
+        McpOAuthRefreshMode::DaemonLease => OAuthRuntime::DaemonLease {
+            server_name: server_name.to_string(),
             auth_manager,
-            store,
+            expires_at: Arc::new(tokio::sync::Mutex::new(initial_tokens.expires_at)),
+            initial_tokens,
         },
-        None => OAuthRuntime::Legacy(OAuthPersistor::new(
-            server_name.to_string(),
-            url.to_string(),
-            auth_manager,
-            credential_store,
-            Some(initial_tokens),
-        )),
+        _ => match coordinated_store {
+            Some(store) => OAuthRuntime::Coordinated {
+                auth_manager,
+                store,
+            },
+            None => OAuthRuntime::Legacy(OAuthPersistor::new(
+                server_name.to_string(),
+                url.to_string(),
+                auth_manager,
+                credential_store,
+                Some(initial_tokens),
+            )),
+        },
     };
 
     Ok(PendingTransport::StreamableHttpWithOAuth {

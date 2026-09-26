@@ -864,6 +864,15 @@ async fn runtime_for(
                 store,
             }
         }
+        crate::McpOAuthRefreshMode::DaemonLease => {
+            let (auth_manager, _store) = coordinated_manager_for(tokens).await?;
+            OAuthRuntime::DaemonLease {
+                server_name: tokens.server_name.clone(),
+                auth_manager,
+                expires_at: Arc::new(tokio::sync::Mutex::new(tokens.expires_at)),
+                initial_tokens: tokens.clone(),
+            }
+        }
     })
 }
 
