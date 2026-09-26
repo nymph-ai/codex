@@ -2471,7 +2471,7 @@ mod tests {
             request_id: request_id(),
             params: v2::McpGetAuthTokenParams {
                 server_name: "server-a".to_string(),
-                force_refresh: false,
+                force_refresh: Some(false),
             },
         };
         assert_eq!(
