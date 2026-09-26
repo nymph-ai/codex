@@ -110,20 +110,27 @@ pub struct StoredOAuthTokens {
 }
 
 impl StoredOAuthTokens {
-    pub(crate) fn has_refresh_token(&self) -> bool {
+    pub fn has_refresh_token(&self) -> bool {
         self.token_response
             .0
             .refresh_token()
             .is_some_and(|refresh_token| !refresh_token.secret().trim().is_empty())
     }
 
-    pub(crate) fn bound_issuer(&self) -> Option<&str> {
+    pub fn bound_issuer(&self) -> Option<&str> {
         self.issuer
             .as_deref()
             .filter(|issuer| !issuer.trim().is_empty())
     }
 
-    pub(crate) fn access_token_is_usable_without_refresh(&self) -> bool {
+    pub fn access_token(&self) -> &str {
+        self.token_response
+            .0
+            .access_token()
+            .secret()
+    }
+
+    pub fn access_token_is_usable_without_refresh(&self) -> bool {
         !token_needs_refresh(self.expires_at)
             && !self
                 .token_response
@@ -165,6 +172,16 @@ impl StoredOAuthCredentialSnapshot {
     /// Returns the normalized credentials originally read from the selected store.
     pub fn credentials(&self) -> &StoredOAuthTokens {
         &self.credentials
+    }
+
+    /// Returns the selected credential store.
+    pub fn store(&self) -> ResolvedOAuthCredentialStore {
+        self.store
+    }
+
+    /// Consumes the snapshot returning its tokens and store.
+    pub fn into_parts(self) -> (StoredOAuthTokens, ResolvedOAuthCredentialStore) {
+        (self.credentials, self.store)
     }
 
     /// Returns whether this snapshot was retained because its store could not be read.
@@ -1036,7 +1053,7 @@ fn expires_in_from_timestamp(expires_at: u64) -> Option<u64> {
     }
 }
 
-fn token_needs_refresh(expires_at: Option<u64>) -> bool {
+pub fn token_needs_refresh(expires_at: Option<u64>) -> bool {
     let Some(expires_at) = expires_at else {
         return false;
     };

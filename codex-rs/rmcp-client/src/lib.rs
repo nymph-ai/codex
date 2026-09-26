@@ -72,6 +72,8 @@ pub use oauth::resolve_daemon_control_socket_path;
 pub use oauth::save_oauth_tokens;
 pub use oauth::stored_oauth_credential_snapshot;
 pub use oauth::stored_oauth_credentials;
+pub use oauth::token_needs_refresh;
+pub use utils::build_default_headers;
 pub use oauth_callback::McpOAuthCallbackMode;
 pub use oauth_callback::resolve_mcp_oauth_callback_url;
 pub use oauth_client_registration::McpOAuthClientRegistration;

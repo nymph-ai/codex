@@ -119,11 +119,12 @@ async fn refresh_expiring_tokens(
             continue;
         };
 
-        if !snapshot.tokens.has_refresh_token() {
+        let credentials = snapshot.credentials();
+        if !credentials.has_refresh_token() {
             continue;
         }
 
-        if !codex_rmcp_client::token_needs_refresh(snapshot.tokens.expires_at) {
+        if !codex_rmcp_client::token_needs_refresh(credentials.expires_at) {
             continue;
         }
 
@@ -136,12 +137,13 @@ async fn refresh_expiring_tokens(
             continue;
         };
 
+        let (tokens, store) = snapshot.into_parts();
         info!("Proactively refreshing OAuth tokens for MCP server `{name}` before expiry");
         match codex_rmcp_client::refresh_oauth_tokens(
             oauth_credential_name.as_ref(),
             &url,
-            snapshot.tokens,
-            snapshot.store,
+            tokens,
+            store,
             default_headers,
             http_client,
             redirect_mode,
