@@ -24,6 +24,12 @@ pub(crate) enum OAuthRuntime {
         auth_manager: Arc<Mutex<AuthorizationManager>>,
         store: OAuthCredentialStore,
     },
+    DaemonLease {
+        server_name: String,
+        auth_manager: Arc<Mutex<AuthorizationManager>>,
+        expires_at: Arc<Mutex<Option<u64>>>,
+        initial_tokens: super::StoredOAuthTokens,
+    },
 }
 
 impl OAuthRuntime {
@@ -58,6 +64,93 @@ impl OAuthRuntime {
                 })
                 .await
                 .context("OAuth refresh task failed")?
+            }
+            Self::DaemonLease {
+                server_name,
+                auth_manager,
+                expires_at,
+                initial_tokens,
+            } => {
+                let current_expires_at = *expires_at.lock().await;
+                if !token_needs_refresh(current_expires_at) {
+                    return Ok(());
+                }
+                let auth_manager = Arc::clone(auth_manager);
+                let expires_at = Arc::clone(expires_at);
+                let server_name = server_name.clone();
+                let initial_tokens = initial_tokens.clone();
+                tokio::spawn(async move {
+                    let resp = super::daemon_lease::lease_access_token_from_daemon(
+                        &server_name,
+                        /*force_refresh*/ false,
+                    )
+                    .await?;
+                    *expires_at.lock().await = resp.expires_at;
+
+                    let mut manager = auth_manager.lock().await;
+                    let mut runtime_tokens = initial_tokens.clone();
+                    runtime_tokens
+                        .token_response
+                        .0
+                        .set_access_token(oauth2::AccessToken::new(resp.access_token));
+                    runtime_tokens.token_response.0.set_refresh_token(None);
+                    runtime_tokens.expires_at = resp.expires_at;
+                    super::install_tokens_in_manager(&mut manager, &runtime_tokens).await?;
+                    Ok::<(), anyhow::Error>(())
+                })
+                .await
+                .context("Daemon token lease task failed")?
+            }
+        }
+    }
+
+    pub(crate) async fn force_refresh(&self) -> Result<()> {
+        match self {
+            Self::Legacy(persistor) => persistor.refresh_tokens(true).await.map(|_| ()),
+            Self::Coordinated {
+                auth_manager,
+                store,
+            } => {
+                let auth_manager = Arc::clone(auth_manager);
+                let store = store.clone();
+                tokio::spawn(async move {
+                    let mut manager = auth_manager.lock().await;
+                    store.refresh_if_needed(&mut manager).await
+                })
+                .await
+                .context("OAuth refresh task failed")?
+            }
+            Self::DaemonLease {
+                server_name,
+                auth_manager,
+                expires_at,
+                initial_tokens,
+            } => {
+                let auth_manager = Arc::clone(auth_manager);
+                let expires_at = Arc::clone(expires_at);
+                let server_name = server_name.clone();
+                let initial_tokens = initial_tokens.clone();
+                tokio::spawn(async move {
+                    let resp = super::daemon_lease::lease_access_token_from_daemon(
+                        &server_name,
+                        /*force_refresh*/ true,
+                    )
+                    .await?;
+                    *expires_at.lock().await = resp.expires_at;
+
+                    let mut manager = auth_manager.lock().await;
+                    let mut runtime_tokens = initial_tokens.clone();
+                    runtime_tokens
+                        .token_response
+                        .0
+                        .set_access_token(oauth2::AccessToken::new(resp.access_token));
+                    runtime_tokens.token_response.0.set_refresh_token(None);
+                    runtime_tokens.expires_at = resp.expires_at;
+                    super::install_tokens_in_manager(&mut manager, &runtime_tokens).await?;
+                    Ok::<(), anyhow::Error>(())
+                })
+                .await
+                .context("Daemon token lease task failed")?
             }
         }
     }
