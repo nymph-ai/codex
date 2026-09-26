@@ -104,6 +104,7 @@ impl OAuthRuntime {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn force_refresh(&self) -> Result<()> {
         match self {
             Self::Legacy(persistor) => persistor.refresh_tokens(true).await.map(|_| ()),
