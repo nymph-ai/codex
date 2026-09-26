@@ -30,7 +30,7 @@ use super::save_oauth_tokens_with_keyring;
 /// through that store. A mid-lifecycle backend failure is unexpected and must return an error
 /// rather than falling back to another possibly stale refresh token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ResolvedOAuthCredentialStore {
+pub enum ResolvedOAuthCredentialStore {
     File,
     Keyring(AuthKeyringBackendKind),
 }
