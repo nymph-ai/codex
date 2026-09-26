@@ -359,6 +359,7 @@ async fn assert_concurrent_refreshes(mode: crate::McpOAuthRefreshMode) -> Result
     let live_credentials = match &first {
         OAuthRuntime::Legacy(persistor) => persistor.stored_credentials().await,
         OAuthRuntime::Coordinated { store, .. } => store.stored_credentials().await,
+        OAuthRuntime::DaemonLease { initial_tokens, .. } => Some(initial_tokens.clone()),
     };
     let disk_credentials = stored_oauth_credentials(
         &initial.server_name,

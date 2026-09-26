@@ -86,6 +86,7 @@ pub(crate) use self::refresh_transaction::install_tokens_in_manager;
 pub(crate) use self::resolved_store::ResolvedOAuthCredentialStore;
 pub(crate) use self::resolved_store::ResolvedOAuthTokens;
 pub(crate) use self::resolved_store::resolve_oauth_tokens_from_store_policy;
+pub(crate) use self::resolved_store::try_resolve_oauth_tokens_from_store_policy;
 pub mod daemon_lease;
 pub use daemon_lease::lease_access_token_from_daemon;
 pub use daemon_lease::lease_access_token_from_socket;
