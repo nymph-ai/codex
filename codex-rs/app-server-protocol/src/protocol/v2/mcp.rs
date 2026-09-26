@@ -319,6 +319,28 @@ pub enum McpServerOauthClientRegistration {
 pub struct McpServerOauthLoginResponse {
     pub authorization_url: String,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpGetAuthTokenParams {
+    #[serde(alias = "server_name")]
+    pub server_name: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not", alias = "force_refresh")]
+    #[ts(optional)]
+    pub force_refresh: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpGetAuthTokenResponse {
+    #[serde(alias = "access_token")]
+    pub access_token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "expires_at")]
+    #[ts(optional = nullable)]
+    pub expires_at: Option<u64>,
+}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

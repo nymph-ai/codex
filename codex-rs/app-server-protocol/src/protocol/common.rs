@@ -1224,6 +1224,12 @@ client_request_definitions! {
         response: v2::McpServerOauthLoginResponse,
     },
 
+    McpGetAuthToken => "mcp/getAuthToken" {
+        params: v2::McpGetAuthTokenParams,
+        serialization: mcp_oauth_server(params.server_name),
+        response: v2::McpGetAuthTokenResponse,
+    },
+
     McpServerRefresh => "config/mcpServer/reload" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         serialization: global("mcp-registry"),
@@ -2456,6 +2462,20 @@ mod tests {
         };
         assert_eq!(
             mcp_oauth.serialization_scope(),
+            Some(ClientRequestSerializationScope::McpOauth {
+                server_name: "server-a".to_string()
+            })
+        );
+
+        let mcp_get_token = ClientRequest::McpGetAuthToken {
+            request_id: request_id(),
+            params: v2::McpGetAuthTokenParams {
+                server_name: "server-a".to_string(),
+                force_refresh: false,
+            },
+        };
+        assert_eq!(
+            mcp_get_token.serialization_scope(),
             Some(ClientRequestSerializationScope::McpOauth {
                 server_name: "server-a".to_string()
             })
