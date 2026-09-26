@@ -2028,6 +2028,23 @@
       },
       "type": "object"
     },
+    "McpGetAuthTokenParams": {
+      "properties": {
+        "forceRefresh": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "serverName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "serverName"
+      ],
+      "type": "object"
+    },
     "McpResourceReadParams": {
       "properties": {
         "connectorId": {
@@ -7725,6 +7742,30 @@
         "params"
       ],
       "title": "McpServer/oauth/loginRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "mcp/getAuthToken"
+          ],
+          "title": "Mcp/getAuthTokenRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/McpGetAuthTokenParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Mcp/getAuthTokenRequest",
       "type": "object"
     },
     {
