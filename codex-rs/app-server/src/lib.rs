@@ -122,6 +122,7 @@ mod gateway_oauth_notifications;
 mod image_url;
 pub mod in_process;
 mod log_write_warning;
+mod mcp_oauth_refresh_worker;
 mod mcp_refresh;
 mod message_processor;
 mod model_catalog;
