@@ -83,7 +83,7 @@ pub(crate) use self::issuer_binding::validate_authorization_server_endpoints;
 pub(crate) use self::issuer_binding::validate_refresh_token_issuer;
 pub(crate) use self::refresh_lock::RefreshCredentialLock;
 pub(crate) use self::refresh_transaction::install_tokens_in_manager;
-pub(crate) use self::resolved_store::ResolvedOAuthCredentialStore;
+pub use self::resolved_store::ResolvedOAuthCredentialStore;
 pub(crate) use self::resolved_store::ResolvedOAuthTokens;
 pub(crate) use self::resolved_store::resolve_oauth_tokens_from_store_policy;
 pub(crate) use self::resolved_store::try_resolve_oauth_tokens_from_store_policy;
