@@ -2009,6 +2009,30 @@
             },
             "method": {
               "enum": [
+                "mcp/getAuthToken"
+              ],
+              "title": "Mcp/getAuthTokenRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/McpGetAuthTokenParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Mcp/getAuthTokenRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "config/mcpServer/reload"
               ],
               "title": "Config/mcpServer/reloadRequestMethod",
@@ -14628,6 +14652,46 @@
           "oAuth"
         ],
         "type": "string"
+      },
+      "McpGetAuthTokenParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "forceRefresh": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "serverName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "serverName"
+        ],
+        "title": "McpGetAuthTokenParams",
+        "type": "object"
+      },
+      "McpGetAuthTokenResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "accessToken": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "accessToken"
+        ],
+        "title": "McpGetAuthTokenResponse",
+        "type": "object"
       },
       "McpResourceReadParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",

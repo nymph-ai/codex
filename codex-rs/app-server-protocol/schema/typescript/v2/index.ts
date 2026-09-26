@@ -281,6 +281,8 @@ export type { McpElicitationTitledSingleSelectEnumSchema } from "./McpElicitatio
 export type { McpElicitationUntitledEnumItems } from "./McpElicitationUntitledEnumItems";
 export type { McpElicitationUntitledMultiSelectEnumSchema } from "./McpElicitationUntitledMultiSelectEnumSchema";
 export type { McpElicitationUntitledSingleSelectEnumSchema } from "./McpElicitationUntitledSingleSelectEnumSchema";
+export type { McpGetAuthTokenParams } from "./McpGetAuthTokenParams";
+export type { McpGetAuthTokenResponse } from "./McpGetAuthTokenResponse";
 export type { McpResourceReadParams } from "./McpResourceReadParams";
 export type { McpResourceReadResponse } from "./McpResourceReadResponse";
 export type { McpResourceReadTarget } from "./McpResourceReadTarget";
