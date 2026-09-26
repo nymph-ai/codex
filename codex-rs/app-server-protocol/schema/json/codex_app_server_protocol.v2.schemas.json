@@ -10711,6 +10711,7 @@
           "type": "string"
         },
         "expiresAt": {
+          "default": null,
           "format": "uint64",
           "minimum": 0.0,
           "type": [
