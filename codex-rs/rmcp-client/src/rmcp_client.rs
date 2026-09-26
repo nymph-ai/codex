@@ -1054,6 +1054,7 @@ impl RmcpClient {
         Some(match runtime {
             OAuthRuntime::Legacy(persistor) => persistor.stored_credentials().await,
             OAuthRuntime::Coordinated { store, .. } => store.stored_credentials().await,
+            OAuthRuntime::DaemonLease { initial_tokens, .. } => Some(initial_tokens),
         })
     }
 
@@ -1621,7 +1622,7 @@ impl RmcpClient {
 async fn create_oauth_transport_and_runtime(
     server_name: &str,
     url: &str,
-    initial_tokens: StoredOAuthTokens,
+    mut initial_tokens: StoredOAuthTokens,
     credential_store: ResolvedOAuthCredentialStore,
     default_headers: HeaderMap,
     http_client: Arc<dyn HttpClient>,
