@@ -326,9 +326,9 @@ pub struct McpServerOauthLoginResponse {
 pub struct McpGetAuthTokenParams {
     #[serde(alias = "server_name")]
     pub server_name: String,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not", alias = "force_refresh")]
-    #[ts(optional)]
-    pub force_refresh: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "force_refresh")]
+    #[ts(optional = nullable)]
+    pub force_refresh: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

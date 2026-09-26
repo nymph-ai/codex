@@ -150,7 +150,8 @@ impl McpRequestProcessor {
             )));
         };
 
-        let needs_refresh = params.force_refresh
+        let force_refresh = params.force_refresh.unwrap_or(false);
+        let needs_refresh = force_refresh
             || codex_rmcp_client::token_needs_refresh(snapshot.tokens.expires_at);
 
         if !needs_refresh && snapshot.tokens.access_token_is_usable_without_refresh() {
@@ -187,7 +188,7 @@ impl McpRequestProcessor {
             default_headers,
             http_client,
             redirect_mode,
-            params.force_refresh,
+            force_refresh,
         )
         .await
         .map_err(|err| {
