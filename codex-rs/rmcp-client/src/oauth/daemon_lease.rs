@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use tokio_tungstenite::client_async_with_config;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
-use tracing::{debug, warn};
+use tracing::debug;
 
 const UDS_WEBSOCKET_HANDSHAKE_URL: &str = "ws://localhost/mcp";
 
@@ -20,7 +20,7 @@ pub fn resolve_daemon_control_socket_path() -> Option<PathBuf> {
             .join("app-server-control")
             .join("app-server-control.sock");
         if sock.exists() {
-            return Some(sock);
+            return Some(sock.to_path_buf());
         }
     }
 
@@ -84,7 +84,7 @@ pub async fn lease_access_token_from_socket(
     });
 
     ws_stream
-        .send(Message::Text(req.to_string()))
+        .send(Message::Text(req.to_string().into()))
         .await
         .context("failed to send mcp/getAuthToken request to daemon")?;
 
