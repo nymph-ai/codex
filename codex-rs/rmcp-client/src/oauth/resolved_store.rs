@@ -34,7 +34,7 @@ use super::save_oauth_tokens_with_keyring;
 /// through that store. A mid-lifecycle backend failure is unexpected and must return an error
 /// rather than falling back to another possibly stale refresh token.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct ResolvedOAuthCredentialStore {
+pub struct ResolvedOAuthCredentialStore {
     pub(super) backend: Backend,
     pub(super) mode: OAuthCredentialsStoreMode,
     pub(super) kind: AuthKeyringBackendKind,
