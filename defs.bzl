@@ -183,6 +183,11 @@ workspace_root_test = rule(
     },
 )
 
+CODEX_VERSION = "0.157.0"
+CODEX_VERSION_MAJOR = "0"
+CODEX_VERSION_MINOR = "157"
+CODEX_VERSION_PATCH = "0"
+
 def codex_rust_crate(
         name,
         crate_name,
@@ -301,6 +306,11 @@ def codex_rust_crate(
 
     rustc_env = {
         "BAZEL_PACKAGE": native.package_name(),
+        "CARGO_PKG_VERSION": CODEX_VERSION,
+        "CARGO_PKG_VERSION_MAJOR": CODEX_VERSION_MAJOR,
+        "CARGO_PKG_VERSION_MINOR": CODEX_VERSION_MINOR,
+        "CARGO_PKG_VERSION_PATCH": CODEX_VERSION_PATCH,
+        "CARGO_PKG_VERSION_PRE": "",
     } | rustc_env
 
     manifest_relpath = native.package_name()
@@ -321,7 +331,7 @@ def codex_rust_crate(
             deps = all_crate_deps(build = True),
             data = build_script_data,
             # Some build script deps sniff version-related env vars...
-            version = "0.0.0",
+            version = CODEX_VERSION,
         )
 
         maybe_deps += [name + "-build-script"]
@@ -417,6 +427,7 @@ def codex_rust_crate(
             # Isolate status inputs in build-commit-env's cheap action so its
             # output, and hence this compiler input, changes only with the commit.
             rustc_env_files = ["//bazel/build-info:build-commit-env"] if binary in binaries_with_build_commit else [],
+            rustc_env = rustc_env,
             srcs = native.glob(["src/**/*.rs"]),
             stamp = 0,
             visibility = ["//visibility:public"],
