@@ -151,18 +151,13 @@ impl McpRequestProcessor {
         };
 
         let force_refresh = params.force_refresh.unwrap_or(false);
+        let credentials = snapshot.credentials();
+        let expires_at = credentials.expires_at;
         let needs_refresh = force_refresh
-            || codex_rmcp_client::token_needs_refresh(snapshot.tokens.expires_at);
+            || codex_rmcp_client::token_needs_refresh(expires_at);
 
-        if !needs_refresh && snapshot.tokens.access_token_is_usable_without_refresh() {
-            let access_token = snapshot
-                .tokens
-                .token_response
-                .0
-                .access_token()
-                .secret()
-                .to_string();
-            let expires_at = snapshot.tokens.expires_at;
+        if !needs_refresh && credentials.access_token_is_usable_without_refresh() {
+            let access_token = credentials.access_token().to_string();
             return Ok(McpGetAuthTokenResponse {
                 access_token,
                 expires_at,
@@ -180,11 +175,12 @@ impl McpRequestProcessor {
         )
         .map_err(|err| internal_error(format!("failed to build default headers: {err}")))?;
 
+        let (tokens, store) = snapshot.into_parts();
         let refreshed = codex_rmcp_client::refresh_oauth_tokens(
             oauth_credential_name.as_ref(),
             &url,
-            snapshot.tokens,
-            snapshot.store,
+            tokens,
+            store,
             default_headers,
             http_client,
             redirect_mode,
@@ -198,12 +194,7 @@ impl McpRequestProcessor {
             ))
         })?;
 
-        let access_token = refreshed
-            .token_response
-            .0
-            .access_token()
-            .secret()
-            .to_string();
+        let access_token = refreshed.access_token().to_string();
         let expires_at = refreshed.expires_at;
 
         Ok(McpGetAuthTokenResponse {
