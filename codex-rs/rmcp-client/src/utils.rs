@@ -100,7 +100,7 @@ fn local_stdio_env_var_names(env_vars: &[McpServerEnvVar]) -> Result<impl Iterat
         .filter(|name| !is_non_inheritable_env_var(name)))
 }
 
-pub(crate) fn build_default_headers(
+pub fn build_default_headers(
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
 ) -> Result<HeaderMap> {
