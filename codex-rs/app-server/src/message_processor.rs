@@ -151,6 +151,7 @@ pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     startup_warnings: StartupWarnings,
     models_refresh_worker: ModelsRefreshWorker,
+    mcp_oauth_refresh_worker: crate::mcp_oauth_refresh_worker::McpOAuthRefreshWorker,
     turn_cost_worker: Option<TurnCostWorker>,
     skills_watcher: Arc<SkillsWatcher>,
     account_processor: Arc<AccountRequestProcessor>,
@@ -405,6 +406,11 @@ impl MessageProcessor {
             Arc::clone(&auth_manager),
         ));
         let models_refresh_worker = crate::models_refresh_worker::spawn(&model_catalog);
+        let mcp_oauth_refresh_worker = crate::mcp_oauth_refresh_worker::spawn(
+            config_manager.clone(),
+            Arc::clone(&auth_manager),
+            Arc::clone(&thread_manager),
+        );
         let turn_cost_worker =
             TurnCostWorker::spawn(Arc::clone(&config), Arc::clone(&auth_manager));
         thread_manager
@@ -616,6 +622,7 @@ impl MessageProcessor {
                 config: config_warnings,
             },
             models_refresh_worker,
+            mcp_oauth_refresh_worker,
             turn_cost_worker,
             skills_watcher,
             account_processor,
@@ -649,6 +656,7 @@ impl MessageProcessor {
         self.account_processor.clear_external_auth();
         self.apps_processor.shutdown();
         self.models_refresh_worker.shutdown();
+        self.mcp_oauth_refresh_worker.shutdown();
         self.skills_watcher.shutdown();
     }
 
@@ -881,6 +889,7 @@ impl MessageProcessor {
 
     pub(crate) async fn drain_background_tasks(&self) {
         self.models_refresh_worker.shutdown();
+        self.mcp_oauth_refresh_worker.shutdown();
         if let Some(worker) = &self.turn_cost_worker {
             worker.shutdown();
         }
@@ -988,6 +997,27 @@ impl MessageProcessor {
                     .await;
             }
             return Ok(());
+        }
+
+        if let ClientRequest::McpGetAuthToken { params, .. } = &codex_request {
+            if !session.initialized() {
+                let outgoing = Arc::clone(&self.outgoing);
+                let mcp_processor = self.mcp_processor.clone();
+                let connection_request_id = connection_request_id.clone();
+                let params = params.clone();
+                tokio::spawn(async move {
+                    match mcp_processor.mcp_get_auth_token(params).await {
+                        Ok(Some(payload)) => {
+                            outgoing.send_response(connection_request_id, payload).await;
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            outgoing.send_error(connection_request_id, error).await;
+                        }
+                    }
+                });
+                return Ok(());
+            }
         }
 
         self.dispatch_initialized_client_request(
@@ -1764,6 +1794,9 @@ impl MessageProcessor {
             }
             ClientRequest::McpServerRefresh { params, .. } => {
                 self.mcp_processor.mcp_server_refresh(params).await
+            }
+            ClientRequest::McpGetAuthToken { params, .. } => {
+                self.mcp_processor.mcp_get_auth_token(params).await
             }
             ClientRequest::McpServerStatusList { params, .. } => {
                 self.mcp_processor

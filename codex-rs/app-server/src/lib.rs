@@ -130,6 +130,7 @@ pub mod in_process;
 mod log_write_warning;
 #[cfg(unix)]
 mod managed_daemon;
+mod mcp_oauth_refresh_worker;
 mod mcp_refresh;
 mod message_processor;
 mod model_catalog;

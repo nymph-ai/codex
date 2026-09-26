@@ -1940,7 +1940,7 @@ impl Config {
             mcp_oauth_credentials_store_mode: self.mcp_oauth_credentials_store_mode,
             mcp_tool_list_changed: self.features.enabled(Feature::McpToolListChanged),
             oauth_refresh_mode: if self.features.enabled(Feature::McpOAuthRefreshCoordination) {
-                McpOAuthRefreshMode::Coordinated
+                McpOAuthRefreshMode::DaemonLease
             } else {
                 McpOAuthRefreshMode::Legacy
             },
