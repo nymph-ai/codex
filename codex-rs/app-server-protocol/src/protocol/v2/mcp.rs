@@ -337,8 +337,7 @@ pub struct McpGetAuthTokenParams {
 pub struct McpGetAuthTokenResponse {
     #[serde(alias = "access_token")]
     pub access_token: String,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "expires_at")]
-    #[ts(optional = nullable)]
+    #[serde(default, alias = "expires_at")]
     pub expires_at: Option<u64>,
 }
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
