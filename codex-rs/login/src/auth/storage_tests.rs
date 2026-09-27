@@ -290,6 +290,106 @@ fn file_storage_delete_removes_auth_file() -> anyhow::Result<()> {
 }
 
 #[test]
+fn file_storage_save_replaces_existing_file_atomically() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let auth_file = get_auth_file(dir.path());
+    std::fs::write(&auth_file, "stale contents")?;
+    #[cfg(unix)]
+    let original_inode = {
+        use std::os::unix::fs::MetadataExt;
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&auth_file, std::fs::Permissions::from_mode(0o644))?;
+        std::fs::metadata(&auth_file)?.ino()
+    };
+
+    let auth_dot_json = auth_with_prefix("replaced");
+    let storage = FileAuthStorage::new(dir.path().to_path_buf());
+    storage.save(&auth_dot_json)?;
+
+    assert_eq!(storage.load()?, Some(auth_dot_json));
+    let entries = std::fs::read_dir(dir.path())?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(entries, vec![std::ffi::OsString::from("auth.json")]);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        use std::os::unix::fs::PermissionsExt;
+        let metadata = std::fs::metadata(&auth_file)?;
+        assert_ne!(
+            metadata.ino(),
+            original_inode,
+            "save should rename a new file over auth.json rather than rewrite it in place"
+        );
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+    }
+    Ok(())
+}
+
+#[test]
+fn file_storage_readers_never_observe_a_partial_save() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let storage = FileAuthStorage::new(dir.path().to_path_buf());
+    let small = auth_with_prefix("small");
+    let large = auth_with_prefix(&"large".repeat(/*n*/ 4096));
+    storage.save(&small)?;
+
+    let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let reader = {
+        let storage = storage.clone();
+        let done = Arc::clone(&done);
+        std::thread::spawn(move || -> anyhow::Result<usize> {
+            let mut reads = 0;
+            while !done.load(std::sync::atomic::Ordering::Acquire) {
+                storage
+                    .load()
+                    .context("reader observed a partially written auth.json")?
+                    .context("auth.json disappeared during save")?;
+                reads += 1;
+            }
+            Ok(reads)
+        })
+    };
+    for iteration in 0..200 {
+        storage.save(if iteration % 2 == 0 { &large } else { &small })?;
+    }
+    done.store(true, std::sync::atomic::Ordering::Release);
+    let reads = reader
+        .join()
+        .map_err(|_| anyhow::anyhow!("reader thread panicked"))??;
+    assert!(reads > 0, "reader should have observed auth.json");
+    Ok(())
+}
+
+#[tokio::test]
+async fn auth_refresh_lock_times_out_while_another_holder_has_it() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let held = lock_auth_for_refresh(dir.path(), Duration::from_secs(/*secs*/ 1))
+        .await?
+        .context("lock file should be created in an existing CODEX_HOME")?;
+
+    let err = lock_auth_for_refresh(dir.path(), Duration::from_millis(/*millis*/ 200))
+        .await
+        .expect_err("a second holder should time out");
+    assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+
+    drop(held);
+    let reacquired = lock_auth_for_refresh(dir.path(), Duration::from_secs(/*secs*/ 1)).await?;
+    assert!(reacquired.is_some(), "lock should be free once released");
+    Ok(())
+}
+
+#[tokio::test]
+async fn auth_refresh_lock_is_skipped_without_codex_home() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let missing = dir.path().join("missing");
+    let lock = lock_auth_for_refresh(&missing, Duration::from_secs(/*secs*/ 1)).await?;
+    assert!(lock.is_none());
+    assert!(!missing.exists());
+    Ok(())
+}
+
+#[test]
 fn ephemeral_storage_save_load_delete_is_in_memory_only() -> anyhow::Result<()> {
     let dir = tempdir()?;
     let storage = create_auth_storage(
