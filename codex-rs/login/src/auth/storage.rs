@@ -10,12 +10,14 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fs::File;
 use std::fs::OpenOptions;
+use std::fs::TryLockError;
 use std::io::Read;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
 use tracing::warn;
 
 #[path = "storage_error.rs"]
@@ -297,6 +299,51 @@ impl AuthStorageBackend for FileAuthStorage {
     fn delete(&self) -> std::io::Result<bool> {
         delete_file_if_exists(&self.codex_home)
     }
+}
+
+pub(super) fn get_auth_lock_file(codex_home: &Path) -> PathBuf {
+    codex_home.join("auth.json.lock")
+}
+
+/// Takes the advisory lock that serializes ChatGPT token refresh across every process sharing
+/// `codex_home`. Hold it from the reload that decides whether to refresh through the save of the
+/// rotated tokens: refresh tokens are single use, so two processes must never redeem the same one.
+///
+/// Returns `Ok(None)` when `codex_home` does not exist, since there is no stored auth to protect.
+pub(super) async fn lock_auth_for_refresh(
+    codex_home: &Path,
+    timeout: Duration,
+) -> std::io::Result<Option<File>> {
+    let file = match OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(get_auth_lock_file(codex_home))
+    {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    tokio::time::timeout(timeout, async {
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Ok(()),
+                Err(TryLockError::WouldBlock) => {
+                    tokio::time::sleep(Duration::from_millis(/*millis*/ 50)).await
+                }
+                Err(TryLockError::Error(err)) => return Err(err),
+            }
+        }
+    })
+    .await
+    .map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "timed out waiting for another process to finish refreshing auth tokens",
+        )
+    })??;
+    Ok(Some(file))
 }
 
 static CODEX_AUTH_SECRET_NAME: Lazy<SecretName> =
