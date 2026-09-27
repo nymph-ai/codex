@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fs::File;
 use std::fs::OpenOptions;
+use std::fs::TryLockError;
 use std::io::Read;
 use std::io::Write;
 #[cfg(unix)]
@@ -16,6 +17,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
 use tracing::warn;
 
 use super::BedrockAccessKeysAuth;
@@ -205,26 +207,98 @@ impl AuthStorageBackend for FileAuthStorage {
 
     fn save(&self, auth_dot_json: &AuthDotJson) -> std::io::Result<()> {
         let auth_file = get_auth_file(&self.codex_home);
-
-        if let Some(parent) = auth_file.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
         let json_data = serde_json::to_string_pretty(auth_dot_json)?;
-        let mut options = OpenOptions::new();
-        options.truncate(true).write(true).create(true);
-        #[cfg(unix)]
-        {
-            options.mode(0o600);
-        }
-        let mut file = options.open(auth_file)?;
-        file.write_all(json_data.as_bytes())?;
-        file.flush()?;
-        Ok(())
+        write_file_atomically(&auth_file, json_data.as_bytes())
     }
 
     fn delete(&self) -> std::io::Result<bool> {
         delete_file_if_exists(&self.codex_home)
     }
+}
+
+/// Replaces `path` so concurrent readers observe either the old or the new contents, never a
+/// partially written file.
+fn write_file_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let temp_path = parent.join(format!(
+        ".{file_name}.{}.{:016x}.tmp",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        options.mode(0o600);
+    }
+    let result = options.open(&temp_path).and_then(|mut file| {
+        file.write_all(contents)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&temp_path, path)
+    });
+    if let Err(err) = result {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(err);
+    }
+    // Persist the rename itself. Not every platform can open a directory for syncing.
+    #[cfg(unix)]
+    {
+        if let Err(err) = File::open(parent).and_then(|directory| directory.sync_all()) {
+            warn!("failed to sync auth directory after saving auth.json: {err}");
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn get_auth_lock_file(codex_home: &Path) -> PathBuf {
+    codex_home.join("auth.json.lock")
+}
+
+/// Takes the advisory lock that serializes ChatGPT token refresh across every process sharing
+/// `codex_home`. Hold it from the reload that decides whether to refresh through the save of the
+/// rotated tokens: refresh tokens are single use, so two processes must never redeem the same one.
+///
+/// Returns `Ok(None)` when `codex_home` does not exist, since there is no stored auth to protect.
+pub(super) async fn lock_auth_for_refresh(
+    codex_home: &Path,
+    timeout: Duration,
+) -> std::io::Result<Option<File>> {
+    let file = match OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(get_auth_lock_file(codex_home))
+    {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    tokio::time::timeout(timeout, async {
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Ok(()),
+                Err(TryLockError::WouldBlock) => {
+                    tokio::time::sleep(Duration::from_millis(/*millis*/ 50)).await
+                }
+                Err(TryLockError::Error(err)) => return Err(err),
+            }
+        }
+    })
+    .await
+    .map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "timed out waiting for another process to finish refreshing auth tokens",
+        )
+    })??;
+    Ok(Some(file))
 }
 
 static CODEX_AUTH_SECRET_NAME: Lazy<SecretName> =

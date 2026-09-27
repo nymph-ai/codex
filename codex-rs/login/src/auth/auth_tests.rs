@@ -1233,6 +1233,56 @@ async fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
 }
 
 #[tokio::test]
+#[serial(codex_auth_env)]
+async fn refresh_lock_timeout_is_transient_and_not_cached() {
+    let codex_home = tempdir().unwrap();
+    let _access_token_guard = remove_access_token_env_var();
+    write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some(WORKSPACE_ID_ALLOWED.to_string()),
+        },
+        codex_home.path(),
+    )
+    .expect("failed to write auth file");
+    let manager = AuthManager::shared(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ None,
+        /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
+        crate::test_support::transport_default_auth_route_config(),
+    )
+    .await;
+    let auth = manager.auth_cached().expect("ChatGPT auth should load");
+    assert!(matches!(auth, CodexAuth::Chatgpt(_)));
+
+    // Another process is mid-refresh and holds the lock past this process's timeout.
+    let _other_process = lock_auth_for_refresh(codex_home.path(), AUTH_REFRESH_LOCK_TIMEOUT)
+        .await
+        .expect("lock should be acquired")
+        .expect("CODEX_HOME exists");
+
+    for result in [
+        manager.refresh_token().await,
+        manager.refresh_token_from_authority().await,
+    ] {
+        let err = result.expect_err("refresh should time out waiting for the lock");
+        assert_eq!(err.failed_reason(), None);
+        match err {
+            RefreshTokenError::Transient(err) => {
+                assert_eq!(err.kind(), std::io::ErrorKind::TimedOut)
+            }
+            other => panic!("expected a transient error, got {other:?}"),
+        }
+    }
+    assert_eq!(manager.refresh_failure_for_auth(&auth), None);
+    assert_eq!(manager.auth_cached(), Some(auth));
+}
+
+#[tokio::test]
 async fn external_bearer_only_auth_manager_uses_cached_provider_token() {
     let script = ProviderAuthScript::new(&["provider-token", "next-token"]).unwrap();
     let manager = AuthManager::external_bearer_only(script.auth_config());
