@@ -57,6 +57,7 @@ pub use crate::auth::storage::AuthDotJson;
 pub use crate::auth::storage::AuthKeyringBackendKind;
 use crate::auth::storage::AuthStorageBackend;
 use crate::auth::storage::create_auth_storage;
+use crate::auth::storage::lock_auth_for_refresh;
 use crate::default_client::create_client;
 use crate::default_client::create_default_auth_client;
 use crate::oauth::ErrorBodyLimit;
@@ -202,6 +203,11 @@ struct ChatgptAuthState {
 
 const TOKEN_REFRESH_INTERVAL: i64 = 8;
 const CHATGPT_ACCESS_TOKEN_REFRESH_WINDOW_MINUTES: i64 = 5;
+/// How long a refresh waits for another process sharing `CODEX_HOME` to finish its own refresh.
+#[cfg(not(test))]
+const AUTH_REFRESH_LOCK_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 60);
+#[cfg(test)]
+const AUTH_REFRESH_LOCK_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 1);
 
 const REFRESH_TOKEN_EXPIRED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.";
 const REFRESH_TOKEN_REUSED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.";
@@ -2859,6 +2865,9 @@ impl AuthManager {
         let expected_account_id = auth_before_reload
             .as_ref()
             .and_then(CodexAuth::get_account_id);
+        let _storage_lock = self
+            .lock_storage_for_refresh(auth_before_reload.as_ref())
+            .await?;
 
         match self
             .reload_if_account_id_matches(expected_account_id.as_deref())
@@ -2888,7 +2897,43 @@ impl AuthManager {
                 REFRESH_TOKEN_UNKNOWN_MESSAGE.to_string(),
             ))
         })?;
+        let attempted_auth = self.auth_cached();
+        let storage_lock = self
+            .lock_storage_for_refresh(attempted_auth.as_ref())
+            .await?;
+        if storage_lock.is_some() {
+            // Another process may have rotated the refresh token since this snapshot was cached.
+            // Redeeming the stale one would fail as reused, so adopt the stored tokens instead.
+            let expected_account_id = attempted_auth.as_ref().and_then(CodexAuth::get_account_id);
+            if let ReloadOutcome::ReloadedChanged = self
+                .reload_if_account_id_matches(expected_account_id.as_deref())
+                .await
+            {
+                tracing::info!("Skipping token refresh because stored auth changed under lock.");
+                return Ok(());
+            }
+        }
         self.refresh_token_from_authority_impl().await
+    }
+
+    /// Serializes managed ChatGPT refresh with other processes that share file-backed auth.
+    /// Callers must hold `refresh_lock` first so a process never waits on itself while holding
+    /// the file lock. Returns `None` when the auth is not stored in `CODEX_HOME`.
+    async fn lock_storage_for_refresh(
+        &self,
+        auth: Option<&CodexAuth>,
+    ) -> Result<Option<std::fs::File>, RefreshTokenError> {
+        let file_backed = matches!(
+            self.auth_credentials_store_mode,
+            AuthCredentialsStoreMode::File | AuthCredentialsStoreMode::Auto
+        );
+        if !file_backed || self.has_external_auth() || !matches!(auth, Some(CodexAuth::Chatgpt(_)))
+        {
+            return Ok(None);
+        }
+        lock_auth_for_refresh(&self.codex_home, AUTH_REFRESH_LOCK_TIMEOUT)
+            .await
+            .map_err(RefreshTokenError::Transient)
     }
 
     async fn refresh_token_from_authority_impl(&self) -> Result<(), RefreshTokenError> {
@@ -2913,8 +2958,23 @@ impl AuthManager {
                             "Token data is not available.",
                         ))
                     })?;
-                    self.refresh_and_persist_chatgpt_token(chatgpt_auth, token_data.refresh_token)
-                        .await
+                    let result = self
+                        .refresh_and_persist_chatgpt_token(chatgpt_auth, token_data.refresh_token)
+                        .await;
+                    let lost_refresh_race = matches!(
+                        &result,
+                        Err(RefreshTokenError::Permanent(error))
+                            if error.reason == RefreshTokenFailedReason::Exhausted
+                    );
+                    if lost_refresh_race
+                        && self
+                            .adopt_stored_auth_after_lost_refresh(chatgpt_auth)
+                            .await
+                    {
+                        Ok(())
+                    } else {
+                        result
+                    }
                 }
                 Some(
                     CodexAuth::ApiKey(_)
@@ -3082,6 +3142,24 @@ impl AuthManager {
             auth,
         )
         .map_err(|error| external_auth.classify_error(std::io::Error::other(error)))
+    }
+
+    /// After the authority reports the refresh token as already used, adopts stored auth for the
+    /// same account if it differs from the snapshot that was redeemed: another writer that does
+    /// not take the refresh lock won the race, and its rotated tokens are valid.
+    async fn adopt_stored_auth_after_lost_refresh(&self, attempted: &ChatgptAuth) -> bool {
+        let attempted_account_id = attempted
+            .current_token_data()
+            .and_then(|tokens| tokens.account_id);
+        let adopted = matches!(
+            self.reload_if_account_id_matches(attempted_account_id.as_deref())
+                .await,
+            ReloadOutcome::ReloadedChanged
+        );
+        if adopted {
+            tracing::info!("Adopted stored auth after another writer rotated the refresh token.");
+        }
+        adopted
     }
 
     // Refreshes ChatGPT OAuth tokens, persists the updated auth state, and
