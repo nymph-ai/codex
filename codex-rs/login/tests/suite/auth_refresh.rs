@@ -1510,6 +1510,174 @@ async fn unauthorized_recovery_requires_chatgpt_auth() -> Result<()> {
     Ok(())
 }
 
+#[serial_test::serial(auth_env)]
+#[tokio::test]
+async fn concurrent_refreshes_across_managers_redeem_the_refresh_token_once() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    let endpoint = SingleUseRefreshEndpoint::mount(&server).await;
+    let ctx = RefreshTokenTestContext::new(&server).await?;
+    let initial_tokens = build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN);
+    ctx.write_auth(&chatgpt_auth(initial_tokens.clone()))
+        .await?;
+    let other_manager = ctx.new_manager().await;
+
+    let (first, second) = tokio::join!(
+        ctx.auth_manager.refresh_token(),
+        other_manager.refresh_token()
+    );
+    first.context("first manager should refresh")?;
+    second.context("second manager should adopt the rotated tokens")?;
+
+    assert_eq!(endpoint.redemptions(&server).await, 1);
+    let rotated_tokens = TokenData {
+        access_token: ROTATED_ACCESS_TOKEN.to_string(),
+        refresh_token: ROTATED_REFRESH_TOKEN.to_string(),
+        ..initial_tokens
+    };
+    let stored = ctx.load_auth()?;
+    assert_eq!(stored.tokens.as_ref(), Some(&rotated_tokens));
+    for manager in [&ctx.auth_manager, &other_manager] {
+        let cached = manager.auth_cached().context("auth should be cached")?;
+        assert_eq!(cached.get_token_data()?, rotated_tokens);
+        assert_eq!(manager.refresh_failure_for_auth(&cached), None);
+    }
+    Ok(())
+}
+
+#[serial_test::serial(auth_env)]
+#[tokio::test]
+async fn unauthorized_recovery_adopts_tokens_rotated_by_another_manager() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    let endpoint = SingleUseRefreshEndpoint::mount(&server).await;
+    let ctx = RefreshTokenTestContext::new(&server).await?;
+    let initial_tokens = build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN);
+    ctx.write_auth(&chatgpt_auth(initial_tokens.clone()))
+        .await?;
+    let stale_manager = ctx.new_manager().await;
+    let stale_auth = stale_manager
+        .auth_cached()
+        .context("stale manager should cache auth")?;
+
+    // The stale manager sees a 401 and reloads before anyone has rotated the tokens.
+    let mut recovery = stale_manager.unauthorized_recovery();
+    let reload = recovery.next().await?;
+    assert_eq!(reload.auth_state_changed(), Some(false));
+    assert_eq!(recovery.step_name(), "refresh_token");
+
+    // Another manager rotates the single-use refresh token in the meantime.
+    ctx.auth_manager
+        .refresh_token_from_authority()
+        .await
+        .context("other manager should refresh")?;
+    assert_eq!(endpoint.redemptions(&server).await, 1);
+
+    recovery
+        .next()
+        .await
+        .context("recovery should adopt the rotated tokens")?;
+
+    assert_eq!(
+        endpoint.redemptions(&server).await,
+        1,
+        "the stale refresh token must not be redeemed"
+    );
+    let rotated_tokens = TokenData {
+        access_token: ROTATED_ACCESS_TOKEN.to_string(),
+        refresh_token: ROTATED_REFRESH_TOKEN.to_string(),
+        ..initial_tokens
+    };
+    let cached = stale_manager
+        .auth_cached()
+        .context("auth should be cached")?;
+    assert_eq!(cached.get_token_data()?, rotated_tokens);
+    assert_eq!(stale_manager.refresh_failure_for_auth(&cached), None);
+    assert_eq!(stale_manager.refresh_failure_for_auth(&stale_auth), None);
+    Ok(())
+}
+
+const ROTATED_ACCESS_TOKEN: &str = "rotated-access-token";
+const ROTATED_REFRESH_TOKEN: &str = "rotated-refresh-token";
+
+/// Token endpoint that behaves like the real authority: each refresh token redeems once, rotates,
+/// and a second redemption fails as `refresh_token_reused`.
+struct SingleUseRefreshEndpoint;
+
+impl SingleUseRefreshEndpoint {
+    async fn mount(server: &MockServer) -> Self {
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .respond_with(SingleUseRefreshResponder {
+                redeemed: std::sync::Mutex::new(false),
+            })
+            .mount(server)
+            .await;
+        Self
+    }
+
+    async fn redemptions(&self, server: &MockServer) -> usize {
+        server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .iter()
+            .filter(|request| {
+                serde_json::from_slice::<serde_json::Value>(&request.body)
+                    .ok()
+                    .and_then(|body| body.get("refresh_token").cloned())
+                    == Some(json!(INITIAL_REFRESH_TOKEN))
+            })
+            .count()
+    }
+}
+
+struct SingleUseRefreshResponder {
+    redeemed: std::sync::Mutex<bool>,
+}
+
+impl wiremock::Respond for SingleUseRefreshResponder {
+    fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
+        let refresh_token = serde_json::from_slice::<serde_json::Value>(&request.body)
+            .ok()
+            .and_then(|body| body.get("refresh_token").cloned());
+        let mut redeemed = self
+            .redeemed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if refresh_token == Some(json!(INITIAL_REFRESH_TOKEN)) && !*redeemed {
+            *redeemed = true;
+            // Hold the response open so a competing redemption has time to arrive.
+            return ResponseTemplate::new(200)
+                .set_delay(StdDuration::from_millis(/*millis*/ 200))
+                .set_body_json(json!({
+                    "access_token": ROTATED_ACCESS_TOKEN,
+                    "refresh_token": ROTATED_REFRESH_TOKEN,
+                }));
+        }
+        ResponseTemplate::new(401).set_body_json(json!({
+            "error": {
+                "code": "refresh_token_reused"
+            }
+        }))
+    }
+}
+
+fn chatgpt_auth(tokens: TokenData) -> AuthDotJson {
+    AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(tokens),
+        last_refresh: Some(Utc::now() - Duration::days(1)),
+        agent_identity: None,
+        personal_access_token: None,
+        bedrock_api_key: None,
+        bedrock_access_keys: None,
+    }
+}
+
 struct RefreshTokenTestContext {
     codex_home: TempDir,
     auth_manager: Arc<AuthManager>,
@@ -1539,6 +1707,20 @@ impl RefreshTokenTestContext {
             auth_manager,
             _env_guard: env_guard,
         })
+    }
+
+    /// Another manager sharing this `CODEX_HOME`, standing in for a second Codex process.
+    async fn new_manager(&self) -> Arc<AuthManager> {
+        AuthManager::shared(
+            self.codex_home.path().to_path_buf(),
+            /*enable_codex_api_key_env*/ false,
+            AuthCredentialsStoreMode::File,
+            /*forced_chatgpt_workspace_id*/ None,
+            /*chatgpt_base_url*/ None,
+            AuthKeyringBackendKind::default(),
+            codex_login::test_support::transport_default_auth_route_config(),
+        )
+        .await
     }
 
     fn load_auth(&self) -> Result<AuthDotJson> {
