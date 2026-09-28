@@ -19,7 +19,7 @@ async fn fabric_catalog_revision(manager: &McpConnectionSet) -> Option<u64> {
         .and_then(|revisions| {
             revisions.get("fabric").map(|revision| match revision {
                 BindingCatalogRevision::Ready(revision) => revision.revision,
-                BindingCatalogRevision::Dormant(revision) => *revision,
+                BindingCatalogRevision::Cached(revision) => *revision,
             })
         })
 }
