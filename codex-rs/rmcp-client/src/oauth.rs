@@ -379,6 +379,7 @@ pub async fn refresh_oauth_tokens(
         Arc::new(Mutex::new(manager)),
         credential_store,
         Some(initial_tokens),
+        None,
     );
 
     persistor.refresh_tokens(force_refresh).await
