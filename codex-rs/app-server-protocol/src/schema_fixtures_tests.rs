@@ -118,6 +118,37 @@ fn write_schema_fixtures_from_env() -> Result<()> {
     )
 }
 
+#[test]
+fn export_precomputed_bundles_hex() -> Result<()> {
+    let temp_root = tempfile::tempdir()?;
+    let schema_root = temp_root.path();
+    write_schema_fixtures_with_options(
+        schema_root,
+        None,
+        SchemaFixtureOptions { experimental_api: false },
+    )?;
+    write_schema_fixtures_with_options(
+        schema_root,
+        None,
+        SchemaFixtureOptions { experimental_api: true },
+    )?;
+    let stable_bytes = std::fs::read(schema_root.join("precomputed/app-server-exports-stable.json.zst"))?;
+    let exp_bytes = std::fs::read(schema_root.join("precomputed/app-server-exports-experimental.json.zst"))?;
+    println!("HEX_STABLE_START");
+    for chunk in stable_bytes.chunks(1024) {
+        let hex: String = chunk.iter().map(|b| format!("{b:02x}")).collect();
+        println!("{hex}");
+    }
+    println!("HEX_STABLE_END");
+    println!("HEX_EXP_START");
+    for chunk in exp_bytes.chunks(1024) {
+        let hex: String = chunk.iter().map(|b| format!("{b:02x}")).collect();
+        println!("{hex}");
+    }
+    println!("HEX_EXP_END");
+    Ok(())
+}
+
 fn assert_schema_fixtures_match_generated(
     label: &'static str,
     generate: impl FnOnce(&Path) -> Result<()>,
