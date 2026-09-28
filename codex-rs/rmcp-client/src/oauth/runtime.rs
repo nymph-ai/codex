@@ -95,7 +95,7 @@ impl OAuthRuntime {
                         .set_access_token(oauth2::AccessToken::new(resp.access_token));
                     runtime_tokens.token_response.0.set_refresh_token(None);
                     runtime_tokens.expires_at = resp.expires_at;
-                    super::install_tokens_in_manager(&mut manager, &runtime_tokens).await?;
+                    super::install_tokens_in_manager(&mut manager, &runtime_tokens, None).await?;
                     Ok::<(), anyhow::Error>(())
                 })
                 .await
@@ -147,7 +147,7 @@ impl OAuthRuntime {
                         .set_access_token(oauth2::AccessToken::new(resp.access_token));
                     runtime_tokens.token_response.0.set_refresh_token(None);
                     runtime_tokens.expires_at = resp.expires_at;
-                    super::install_tokens_in_manager(&mut manager, &runtime_tokens).await?;
+                    super::install_tokens_in_manager(&mut manager, &runtime_tokens, None).await?;
                     Ok::<(), anyhow::Error>(())
                 })
                 .await
