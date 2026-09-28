@@ -146,7 +146,7 @@ fn export_precomputed_bundles_hex() -> Result<()> {
         println!("{hex}");
     }
     println!("HEX_EXP_END");
-    Ok(())
+    panic!("BUNDLES_READY");
 }
 
 fn assert_schema_fixtures_match_generated(
