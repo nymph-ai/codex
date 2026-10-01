@@ -98,6 +98,18 @@ jobs:
           TAG="${{ steps.target.outputs.tag }}"
           COMMIT="${{ steps.rebase.outputs.conflicted_commit }}"
           FILES="${{ steps.rebase.outputs.conflicted_files }}"
+          if [ "${{ steps.rebase.outputs.conflict }}" = "false" ]; then
+            # The cherry-picks applied; the push was refused. GITHUB_TOKEN has
+            # no `workflows` permission and upstream tags touch .github/workflows.
+            {
+              echo "## candidate/${TAG} rebased cleanly but could not be pushed"
+              echo
+              echo "Push it with a token that has the workflow scope; see"
+              echo "fabric/harnesses/codex-sync.md in the monorepo."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=Candidate push refused::${TAG} rebased cleanly; push candidate/${TAG} with a workflow-scoped token"
+            exit 0
+          fi
           {
             echo "## Upstream rebase conflict for ${TAG}"
             echo
