@@ -58,8 +58,16 @@ jobs:
           echo "Checking out candidate branch for ${TAG}..."
           git checkout -B "candidate/${TAG}" "refs/tags/${TAG}"
 
+          # The patchset is every commit on fabric-patchset above the upstream
+          # release it currently sits on. Derive that base from the branch
+          # rather than hardcoding it: a literal base goes stale the moment
+          # fabric-patchset is repointed, and the range then spans all of
+          # upstream's history between the two releases (nymph-ai/nymphai#2779).
+          BASE=$(git describe --tags --abbrev=0 --match='rust-v*' --exclude='rust-v*-*' origin/fabric-patchset)
+          echo "Patchset base: ${BASE}"
           echo "Attempting cherry-pick of origin/fabric-patchset commits..."
-          COMMITS=$(git rev-list --reverse origin/fabric-patchset ^6b9826e3aa83b1a5947db50f4332cb9c65f1b340)
+          COMMITS=$(git rev-list --reverse --no-merges origin/fabric-patchset "^${BASE}")
+          echo "Patchset: $(echo "${COMMITS}" | wc -w) commits"
           
           CONFLICT=0
           for COMMIT in ${COMMITS}; do
