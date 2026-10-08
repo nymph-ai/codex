@@ -2,6 +2,8 @@
 //! of the host session runtime.
 //! The host supplies review attempts and enforces the resulting decision on the bound action.
 
+#![recursion_limit = "256"]
+
 mod approval_request;
 mod approval_request_json;
 mod assessment;
