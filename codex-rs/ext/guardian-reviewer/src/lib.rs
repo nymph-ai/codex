@@ -2,6 +2,8 @@
 //! of the host session runtime.
 //! The host supplies review attempts and enforces the resulting decision on the bound action.
 
+#![recursion_limit = "256"]
+
 mod assessment;
 mod circuit_breaker;
 mod completion;
