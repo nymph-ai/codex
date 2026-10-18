@@ -109,7 +109,7 @@ impl McpRequestProcessor {
         &self,
         params: McpGetAuthTokenParams,
     ) -> Result<McpGetAuthTokenResponse, JSONRPCErrorError> {
-        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        let config = self.load_global_config().await?;
         let auth = self.auth_manager.auth().await;
         let mcp_config = self
             .thread_manager
