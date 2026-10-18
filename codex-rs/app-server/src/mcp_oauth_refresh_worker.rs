@@ -8,9 +8,9 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+use crate::config_manager::ConfigManager;
 use codex_core::ThreadManager;
 use codex_login::AuthManager;
-use crate::config_manager::ConfigManager;
 
 const MCP_OAUTH_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
