@@ -253,6 +253,8 @@ pub enum Feature {
     CodexAppsMcp20260728,
     /// Let RMCP coordinate OAuth refresh through the configured credential store.
     McpOAuthRefreshCoordination,
+    /// Let a root session own its Fabric inbox and lifecycle on its MCP connection.
+    FabricSessionInbox,
     /// Enable enterprise refresh-token authorization for configured MCP resources.
     UseXaa,
     /// Removed compatibility flag for the legacy Apps MCP path override.
@@ -1555,6 +1557,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "mcp_oauth_refresh_coordination",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::FabricSessionInbox,
+        key: "fabric_session_inbox",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::UseXaa,

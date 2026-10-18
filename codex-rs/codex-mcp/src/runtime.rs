@@ -639,6 +639,14 @@ impl McpRuntime {
         self.latest_connections().list_all_tools().await
     }
 
+    /// Connection-specific capabilities, without issuing a tool call or consuming inbox data.
+    pub fn latest_server_capabilities(&self, server: &str) -> Option<serde_json::Value> {
+        self.latest_connections()
+            .list_available_server_capabilities()
+            .get(server)
+            .cloned()
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn latest_call_tool(
         &self,

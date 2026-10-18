@@ -1628,6 +1628,7 @@ impl Session {
                 Arc::new(CoreHookMcpExecutor {
                     runtime: Arc::clone(&mcp_runtime),
                     thread_id,
+                    session_owned_fabric: super::fabric_inbox::enabled(&config, &session_configuration.session_source),
                 }),
             )?;
             for warning in hooks.startup_warnings() {

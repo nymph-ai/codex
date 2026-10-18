@@ -21,6 +21,12 @@ impl Session {
     ) {
         let metadata: Arc<dyn TurnAnalyticsMetadata> = turn_context.turn_metadata_state.clone();
         turn_context.extension_data.insert(metadata);
+        if phase == TurnStartPhase::BeforeTaskRegistration {
+            crate::session::fabric_inbox::notify(
+                self,
+                crate::session::fabric_inbox::Lifecycle::Busy,
+            );
+        }
         let collaboration_mode = turn_context.collaboration_mode();
         for contributor in self.services.extensions.turn_lifecycle_contributors() {
             if contributor.turn_start_phase(&self.services.thread_extension_data) != phase {
@@ -72,6 +78,10 @@ impl Session {
             return;
         }
 
+        crate::session::fabric_inbox::notify(
+            self,
+            crate::session::fabric_inbox::Lifecycle::Idle(cause),
+        );
         for contributor in self.services.extensions.thread_lifecycle_contributors() {
             contributor
                 .on_thread_idle(codex_extension_api::ThreadIdleInput {
@@ -88,6 +98,10 @@ impl Session {
         reason: TurnAbortReason,
         turn_store: &ExtensionData,
     ) {
+        crate::session::fabric_inbox::notify(
+            self,
+            crate::session::fabric_inbox::Lifecycle::Aborted,
+        );
         for contributor in self.services.extensions.turn_lifecycle_contributors() {
             contributor
                 .on_turn_abort(codex_extension_api::TurnAbortInput {

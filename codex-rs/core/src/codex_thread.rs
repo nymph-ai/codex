@@ -326,6 +326,8 @@ impl CodexThread {
     }
 
     pub(crate) async fn emit_thread_ready_lifecycle(&self) {
+        crate::session::fabric_inbox::start(&self.session, self.io.clone(), &self.session_source)
+            .await;
         let contributors = self
             .session
             .services

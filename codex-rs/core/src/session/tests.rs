@@ -995,6 +995,7 @@ async fn preview_session_start_hooks(
         },
         thread_id,
         Arc::new(CoreHookMcpExecutor {
+            session_owned_fabric: false,
             runtime: Arc::new(McpRuntime::empty(config.prefix_mcp_tool_names())),
             thread_id,
         }),
@@ -6866,6 +6867,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         },
         thread_id,
         Arc::new(CoreHookMcpExecutor {
+            session_owned_fabric: false,
             runtime: Arc::clone(&mcp_runtime),
             thread_id,
         }),
@@ -9134,6 +9136,7 @@ where
         },
         thread_id,
         Arc::new(CoreHookMcpExecutor {
+            session_owned_fabric: false,
             runtime: Arc::clone(&mcp_runtime),
             thread_id,
         }),

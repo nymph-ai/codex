@@ -860,6 +860,8 @@ impl Session {
                 time_to_first_token_ms,
             })
         };
+        let fabric_receipt_success =
+            matches!(&event, EventMsg::TurnComplete(result) if result.error.is_none());
         let saved_guardian_completion =
             matches!(event, EventMsg::TurnComplete(_)) && self.is_private_guardian_reviewer().await;
         if !saved_guardian_completion {
@@ -887,9 +889,24 @@ impl Session {
         }
         // Private reviewers already flushed the terminal event before delivering it.
         // Other buffering writers still need a barrier for the terminal event.
-        if !saved_guardian_completion && let Err(err) = self.flush_rollout().await {
-            warn!("failed to flush rollout after emitting terminal turn event: {err}");
-        }
+        let persisted = if !saved_guardian_completion {
+            match self.flush_rollout().await {
+                Ok(()) => true,
+                Err(err) => {
+                    warn!("failed to flush rollout after emitting terminal turn event: {err}");
+                    false
+                }
+            }
+        } else {
+            true
+        };
+        crate::session::fabric_inbox::notify(
+            self,
+            crate::session::fabric_inbox::Lifecycle::Finished {
+                turn_id: turn_context.sub_id.clone(),
+                success: persisted && fabric_receipt_success,
+            },
+        );
         if cleared_active_turn {
             self.maybe_start_turn_for_pending_work().await;
         }

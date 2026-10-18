@@ -1299,6 +1299,17 @@ fn build_mcp_tool_call_request_meta(
     is_host_owned_apps: bool,
 ) -> Option<serde_json::Value> {
     let mut request_meta = serde_json::Map::new();
+    if server == "fabric"
+        && crate::session::fabric_inbox::enabled(
+            &step_context.turn.config,
+            &step_context.turn.session_source,
+        )
+    {
+        request_meta.insert(
+            "fabricDelivery".to_string(),
+            serde_json::Value::String("session".to_string()),
+        );
+    }
     request_meta.insert(
         "callId".to_string(),
         serde_json::Value::String(call_id.to_string()),
