@@ -166,8 +166,7 @@ impl McpRequestProcessor {
         let force_refresh = params.force_refresh.unwrap_or(false);
         let credentials = snapshot.credentials();
         let expires_at = credentials.expires_at;
-        let needs_refresh = force_refresh
-            || codex_rmcp_client::token_needs_refresh(expires_at);
+        let needs_refresh = force_refresh || codex_rmcp_client::token_needs_refresh(expires_at);
 
         if !needs_refresh && credentials.access_token_is_usable_without_refresh() {
             let access_token = credentials.access_token().to_string();
@@ -182,11 +181,9 @@ impl McpRequestProcessor {
             .map_err(|err| {
                 internal_error(format!("failed to resolve MCP server runtime: {err}"))
             })?;
-        let default_headers = codex_rmcp_client::build_default_headers(
-            http_headers,
-            env_http_headers,
-        )
-        .map_err(|err| internal_error(format!("failed to build default headers: {err}")))?;
+        let default_headers =
+            codex_rmcp_client::build_default_headers(http_headers, env_http_headers)
+                .map_err(|err| internal_error(format!("failed to build default headers: {err}")))?;
 
         let (tokens, store) = snapshot.into_parts();
         let refreshed = codex_rmcp_client::refresh_oauth_tokens(

@@ -334,7 +334,11 @@ pub struct McpServerOauthLoginResponse {
 pub struct McpGetAuthTokenParams {
     #[serde(alias = "server_name")]
     pub server_name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "force_refresh")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "force_refresh"
+    )]
     #[ts(optional = nullable)]
     pub force_refresh: Option<bool>,
 }
