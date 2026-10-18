@@ -2309,7 +2309,9 @@ async fn create_oauth_transport_and_runtime(
         };
     manager.set_metadata(metadata);
     let mut runtime_tokens = initial_tokens.clone();
-    if use_stored_access_token_only || matches!(oauth_refresh_mode, McpOAuthRefreshMode::DaemonLease) {
+    if use_stored_access_token_only
+        || matches!(oauth_refresh_mode, McpOAuthRefreshMode::DaemonLease)
+    {
         runtime_tokens.token_response.0.set_refresh_token(None);
         runtime_tokens.issuer = None;
     }
@@ -2325,7 +2327,9 @@ async fn create_oauth_transport_and_runtime(
             manager.set_credential_store(store.clone());
             Some(store)
         }
-        McpOAuthRefreshMode::Legacy | McpOAuthRefreshMode::Coordinated | McpOAuthRefreshMode::DaemonLease => None,
+        McpOAuthRefreshMode::Legacy
+        | McpOAuthRefreshMode::Coordinated
+        | McpOAuthRefreshMode::DaemonLease => None,
     };
 
     let mut http_client = StreamableHttpClientAdapter::new(

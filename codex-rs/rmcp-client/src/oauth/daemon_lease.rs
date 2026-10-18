@@ -1,13 +1,13 @@
-use std::path::{Path, PathBuf};
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use codex_app_server_protocol::McpGetAuthTokenResponse;
 use codex_uds::UnixStream;
 use codex_utils_home_dir::find_codex_home;
 use futures::{SinkExt, StreamExt};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
 use tokio_tungstenite::client_async_with_config;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tracing::debug;
 
 const UDS_WEBSOCKET_HANDSHAKE_URL: &str = "ws://localhost/mcp";
@@ -66,12 +66,20 @@ pub async fn lease_access_token_from_socket(
     let request = UDS_WEBSOCKET_HANDSHAKE_URL
         .into_client_request()
         .map_err(|err| anyhow!("invalid UDS websocket handshake URL: {err}"))?;
-    let stream = UnixStream::connect(socket_path)
-        .await
-        .with_context(|| format!("failed to connect to daemon socket at {}", socket_path.display()))?;
+    let stream = UnixStream::connect(socket_path).await.with_context(|| {
+        format!(
+            "failed to connect to daemon socket at {}",
+            socket_path.display()
+        )
+    })?;
     let (mut ws_stream, _) = client_async_with_config(request, stream, None)
         .await
-        .with_context(|| format!("failed to upgrade websocket on daemon socket at {}", socket_path.display()))?;
+        .with_context(|| {
+            format!(
+                "failed to upgrade websocket on daemon socket at {}",
+                socket_path.display()
+            )
+        })?;
 
     let req = json!({
         "jsonrpc": "2.0",
