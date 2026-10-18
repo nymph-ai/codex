@@ -22,6 +22,10 @@ jobs:
       contents: write
       issues: write
       pull-requests: write
+    env:
+      # GITHUB_TOKEN cannot push when upstream changes touch workflows; use the
+      # fork secret documented in nymph-ai/nymphai fabric/harnesses/CODEX_AUTOMATION_CREDENTIALS.md
+      GH_TOKEN: ${{ secrets.FABRIC_WORKFLOW_PUSH_TOKEN }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -32,6 +36,9 @@ jobs:
         run: |
           git config user.name "NymphAI Fork Sync Bot"
           git config user.email "bot@nymphai.internal"
+          if [ -n "${GH_TOKEN:-}" ]; then
+            gh auth setup-git
+          fi
 
       - name: Fetch Upstream Tags and Branches
         run: |
@@ -51,44 +58,26 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "Selected target tag: ${TAG}"
 
-      - name: Attempt Rebase of Fabric Patchset
+      - name: Rebase fabric patchset onto upstream tag
         id: rebase
         run: |
           TAG="${{ steps.target.outputs.tag }}"
-          echo "Checking out candidate branch for ${TAG}..."
-          git checkout -B "candidate/${TAG}" "refs/tags/${TAG}"
-
-          # The patchset is every commit on fabric-patchset above the upstream
-          # release it currently sits on. Derive that base from the branch
-          # rather than hardcoding it: a literal base goes stale the moment
-          # fabric-patchset is repointed, and the range then spans all of
-          # upstream's history between the two releases (nymph-ai/nymphai#2779).
-          BASE=$(git describe --tags --abbrev=0 --match='rust-v*' --exclude='rust-v*-*' origin/fabric-patchset)
-          echo "Patchset base: ${BASE}"
-          echo "Attempting cherry-pick of origin/fabric-patchset commits..."
-          COMMITS=$(git rev-list --reverse --no-merges origin/fabric-patchset "^${BASE}")
-          echo "Patchset: $(echo "${COMMITS}" | wc -w) commits"
-          
-          CONFLICT=0
-          for COMMIT in ${COMMITS}; do
-            echo "Applying ${COMMIT}..."
-            if ! git cherry-pick "${COMMIT}"; then
-              echo "Conflict applying ${COMMIT}!"
-              CONFLICT=1
-              break
-            fi
-          done
-
-          if [ "${CONFLICT}" -eq 0 ]; then
-            echo "Rebase succeeded without conflicts!"
+          if git ls-remote --heads origin "refs/heads/candidate/${TAG}" | grep -q "candidate/${TAG}$"; then
+            echo "candidate/${TAG} already exists; skipping automated rebase"
             echo "conflict=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git checkout -B fabric-patchset-rebase origin/fabric-patchset
+          chmod +x tools/fork/rebase-upstream.sh
+          if ./tools/fork/rebase-upstream.sh "${TAG}"; then
+            echo "conflict=false" >> "$GITHUB_OUTPUT"
+            git branch -f "candidate/${TAG}" HEAD
             git push -u origin "candidate/${TAG}" --force-with-lease
           else
             echo "conflict=true" >> "$GITHUB_OUTPUT"
-            echo "conflicted_commit=${COMMIT}" >> "$GITHUB_OUTPUT"
-            CONFLICTED_FILES=$(git diff --name-only --diff-filter=U | tr '\n' ' ')
+            CONFLICTED_FILES=$(git diff --name-only --diff-filter=U 2>/dev/null | tr '\n' ' ' || true)
             echo "conflicted_files=${CONFLICTED_FILES}" >> "$GITHUB_OUTPUT"
-            git cherry-pick --abort || true
+            git rebase --abort 2>/dev/null || true
             exit 1
           fi
 
@@ -96,11 +85,8 @@ jobs:
         if: failure()
         run: |
           TAG="${{ steps.target.outputs.tag }}"
-          COMMIT="${{ steps.rebase.outputs.conflicted_commit }}"
           FILES="${{ steps.rebase.outputs.conflicted_files }}"
           if [ "${{ steps.rebase.outputs.conflict }}" = "false" ]; then
-            # The cherry-picks applied; the push was refused. GITHUB_TOKEN has
-            # no `workflows` permission and upstream tags touch .github/workflows.
             {
               echo "## candidate/${TAG} rebased cleanly but could not be pushed"
               echo
@@ -113,12 +99,11 @@ jobs:
           {
             echo "## Upstream rebase conflict for ${TAG}"
             echo
-            echo "Automated rebase of fabric-patchset onto upstream tag ${TAG} hit merge conflicts."
+            echo "Automated rebase via tools/fork/rebase-upstream.sh onto upstream tag ${TAG} hit merge conflicts."
             echo
-            echo "- conflicted commit: ${COMMIT}"
             echo "- conflicted files: ${FILES}"
             echo
             echo "Resolve them in a worktree and update fabric-patchset; the manual protocol is in"
             echo "fabric/harnesses/codex-sync.md in the monorepo."
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "::error title=Upstream rebase conflict::${TAG} conflicts at ${COMMIT} in ${FILES}"
+          echo "::error title=Upstream rebase conflict::${TAG} conflicts in ${FILES}"
