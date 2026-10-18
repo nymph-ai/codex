@@ -29,12 +29,9 @@ fn client_display_cap_preserves_unicode_ends_and_full_source_events() {
         parsed_cmd: vec![],
         source: ExecCommandSource::Agent,
         interaction_input: None,
-        stdout: full.clone(),
-        stderr: String::new(),
         aggregated_output: full.clone(),
         exit_code: 0,
         duration: std::time::Duration::from_millis(12),
-        formatted_output: full.clone(),
         status: codex_protocol::protocol::ExecCommandStatus::Completed,
     };
     let ThreadItem::CommandExecution {
@@ -45,7 +42,6 @@ fn client_display_cap_preserves_unicode_ends_and_full_source_events() {
     };
     assert_eq!(aggregated_output, Some(expected.clone()));
     assert_eq!(event.aggregated_output, full);
-    assert_eq!(event.formatted_output, full);
     for change in [
         FileChange::Add {
             content: full.clone(),
