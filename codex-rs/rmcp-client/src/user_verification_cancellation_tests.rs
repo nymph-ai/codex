@@ -277,6 +277,7 @@ async fn transport_eof_releases_pending_elicitations_without_dropping_client() -
                 Box::pin(async move { Ok(response_rx.await?) })
             }),
             pause_state,
+            std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         );
         let (client_transport, server_transport) = tokio::io::duplex(/*max_buf_size*/ 4096);
         let client = serve_directly(service, client_transport, /*peer_info*/ None);
