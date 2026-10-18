@@ -182,11 +182,6 @@ workspace_root_test = rule(
     },
 )
 
-CODEX_VERSION = "0.160.0"
-CODEX_VERSION_MAJOR = "0"
-CODEX_VERSION_MINOR = "160"
-CODEX_VERSION_PATCH = "0"
-
 def codex_rust_crate(
         name,
         crate_name,
@@ -310,14 +305,16 @@ def codex_rust_crate(
     )
 
     package_data = DEP_DATA.get(native.package_name())
+    version_parts = package_data["version"].split("-", 1)
+    version_numbers = version_parts[0].split(".")
     rustc_env = {
         "BAZEL_PACKAGE": native.package_name(),
         "CARGO_PKG_NAME": package_data["package_name"],
-        "CARGO_PKG_VERSION": CODEX_VERSION,
-        "CARGO_PKG_VERSION_MAJOR": CODEX_VERSION_MAJOR,
-        "CARGO_PKG_VERSION_MINOR": CODEX_VERSION_MINOR,
-        "CARGO_PKG_VERSION_PATCH": CODEX_VERSION_PATCH,
-        "CARGO_PKG_VERSION_PRE": "",
+        "CARGO_PKG_VERSION": package_data["version"],
+        "CARGO_PKG_VERSION_MAJOR": version_numbers[0],
+        "CARGO_PKG_VERSION_MINOR": version_numbers[1],
+        "CARGO_PKG_VERSION_PATCH": version_numbers[2],
+        "CARGO_PKG_VERSION_PRE": version_parts[1] if len(version_parts) > 1 else "",
     } | rustc_env
 
     manifest_relpath = native.package_name()
