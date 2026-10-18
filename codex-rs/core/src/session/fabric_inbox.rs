@@ -303,6 +303,8 @@ fn request(messages: &[Message]) -> anyhow::Result<TurnInputRequest> {
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText { text }],
                 phase: None,
+                status: None,
+                encrypted_content: None,
                 internal_chat_message_metadata_passthrough: None,
             },
         ))
