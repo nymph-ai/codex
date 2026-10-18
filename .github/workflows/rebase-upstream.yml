@@ -22,6 +22,10 @@ jobs:
       contents: write
       issues: write
       pull-requests: write
+    env:
+      # GITHUB_TOKEN cannot push when upstream changes touch workflows; use the
+      # fork secret documented in nymph-ai/nymphai fabric/harnesses/CODEX_AUTOMATION_CREDENTIALS.md
+      GH_TOKEN: ${{ secrets.FABRIC_WORKFLOW_PUSH_TOKEN }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -32,6 +36,9 @@ jobs:
         run: |
           git config user.name "NymphAI Fork Sync Bot"
           git config user.email "bot@nymphai.internal"
+          if [ -n "${GH_TOKEN:-}" ]; then
+            gh auth setup-git
+          fi
 
       - name: Fetch Upstream Tags and Branches
         run: |
