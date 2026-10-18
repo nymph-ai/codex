@@ -27,11 +27,7 @@ use codex_app_server_protocol::WindowsSandboxSetupMode;
 pub(super) const SHUTDOWN_FIRST_EXIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
 
 impl App {
-    async fn apply_update_model(
-        &mut self,
-        app_server: &mut AppServerSession,
-        model: String,
-    ) {
+    async fn apply_update_model(&mut self, app_server: &mut AppServerSession, model: String) {
         if self
             .active_thread_model_setting_update_params(model.clone())
             .is_some_and(|params| params.permissions.is_some())
@@ -66,35 +62,30 @@ impl App {
         }
         let model_changed = self.chat_widget.current_model() != model
             || self.chat_widget.current_collaboration_mode().model() != model;
-        let default_effort =
-            self.on_apply_advanced_reasoning(model.as_str(), effort.clone());
+        let default_effort = self.on_apply_advanced_reasoning(model.as_str(), effort.clone());
         if model_changed {
-            self.sync_active_thread_model_setting(
-                app_server,
-                model.clone(),
-                Some(effort.clone()),
-            )
-            .await;
+            self.sync_active_thread_model_setting(app_server, model.clone(), Some(effort.clone()))
+                .await;
         } else if let Some(mut params) =
             self.active_thread_reasoning_setting_update_params(Some(effort.clone()))
         {
-            params.collaboration_mode =
-                Some(self.chat_widget.effective_collaboration_mode());
+            params.collaboration_mode = Some(self.chat_widget.effective_collaboration_mode());
             self.send_thread_settings_update(app_server, params).await;
         }
         self.sync_active_thread_service_tier_to_cached_session()
             .await;
 
         if let Some(default_effort) = default_effort.as_ref()
-            && let Err(err) = self.persist_model_defaults(
-                app_server.request_handle(),
-                crate::config_update::build_model_selection_edits(
-                    model.as_str(),
-                    Some(default_effort),
-                ),
-                "default model and reasoning effort",
-            )
-            .await
+            && let Err(err) = self
+                .persist_model_defaults(
+                    app_server.request_handle(),
+                    crate::config_update::build_model_selection_edits(
+                        model.as_str(),
+                        Some(default_effort),
+                    ),
+                    "default model and reasoning effort",
+                )
+                .await
         {
             let error = format_config_error(&err);
             tracing::error!(error = %error, "failed to persist conversation model");
