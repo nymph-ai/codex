@@ -66,6 +66,17 @@ impl UnixStream {
         self.inner.ensure_non_elevated_peer()
     }
 
+    /// Linux credentials identify the process that created the peer socket,
+    /// even when a forked child temporarily retains its listening descriptor.
+    #[cfg(target_os = "linux")]
+    pub fn peer_pid(&self) -> IoResult<Option<u32>> {
+        Ok(self
+            .inner
+            .peer_cred()?
+            .pid()
+            .and_then(|pid| u32::try_from(pid).ok()))
+    }
+
     /// Connects to `socket_path`.
     pub async fn connect(socket_path: impl AsRef<Path>) -> IoResult<Self> {
         platform::connect_stream(socket_path.as_ref())
