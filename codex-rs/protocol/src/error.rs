@@ -435,9 +435,16 @@ impl CodexErr {
             | CodexErrorDetails::CyberPolicy { .. }
             | CodexErrorDetails::BioPolicy { .. }
             | CodexErrorDetails::MisalignmentPolicyViolation { .. } => None,
-            CodexErrorDetails::ServerOverloaded | CodexErrorDetails::RetryLimit(_) => {
-                self.server_retry_delay()
+            CodexErrorDetails::ServerOverloaded => {
+                Some(self.server_retry_delay().unwrap_or_else(|| {
+                    // Capacity is backpressure even when no Retry-After was supplied.
+                    // Start at two seconds, jitter, and cap repeated waits at a minute.
+                    backoff(retry_count.min(6))
+                        .saturating_mul(10)
+                        .min(Duration::from_secs(60))
+                }))
             }
+            CodexErrorDetails::RetryLimit(_) => self.server_retry_delay(),
             CodexErrorDetails::Stream(..)
             | CodexErrorDetails::ContentFilter
             | CodexErrorDetails::RateLimitExceeded(_)

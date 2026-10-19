@@ -130,7 +130,7 @@ fn map_api_error_distinguishes_capacity_from_slow_down() {
         (
             "server_is_overloaded",
             CodexErrorInfo::ServerOverloaded,
-            false,
+            true,
         ),
         ("slow_down", CodexErrorInfo::RateLimitExceeded, true),
         (

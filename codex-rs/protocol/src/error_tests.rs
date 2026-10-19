@@ -39,7 +39,7 @@ async fn codex_err_debug_preserves_legacy_shape() {
 #[test]
 fn retryability_preserves_error_details_distinctions() {
     let errors = [
-        (CodexErr::ServerOverloaded, false),
+        (CodexErr::ServerOverloaded, true),
         (CodexErr::new(CodexErrorDetails::ContentFilter), true),
         (
             CodexErr::new(CodexErrorDetails::RateLimitExceeded("retry later".into())),
@@ -754,4 +754,28 @@ fn usage_limit_reached_with_promo_message() {
         );
         assert_eq!(err.to_string(), expected);
     });
+}
+
+#[tokio::test(start_paused = true)]
+async fn capacity_uses_bounded_backpressure_and_preserves_server_deadline() {
+    for (attempt, bounds) in [(1, 1800..2200), (3, 7200..8800), (u64::MAX, 57600..60001)] {
+        let delay = CodexErr::ServerOverloaded
+            .retry_delay(attempt)
+            .expect("capacity retry");
+        assert!(bounds.contains(&delay.as_millis()), "{attempt}: {delay:?}");
+    }
+    let advice = RetryAfter::from_delay(Duration::from_secs(17)).unwrap();
+    tokio::time::advance(Duration::from_secs(4)).await;
+    assert_eq!(
+        CodexErr::ServerOverloaded
+            .with_retry_after(advice)
+            .retry_delay(1),
+        Some(Duration::from_secs(13))
+    );
+    assert_eq!(
+        CodexErr::QuotaExceeded
+            .with_retry_after(advice)
+            .retry_delay(1),
+        None
+    );
 }
