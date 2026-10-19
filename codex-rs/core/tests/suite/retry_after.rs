@@ -500,7 +500,7 @@ async fn exhausted_http_retries_preserve_deadline_through_error_mapping() {
 }
 
 /// Retry advice changes delays but never extends either retry budget or its displayed count.
-#[test_case::test_case(None, 2, 3; "without_advice")]
+#[test_case::test_case(None, 2, 9; "without_advice")]
 #[test_case::test_case(Some("0"), 0, 3; "advice_without_stream_retries")]
 #[test_case::test_case(Some("0"), 2, 9; "advice_with_stream_retries")]
 #[tokio::test(flavor = "current_thread")]
@@ -563,13 +563,9 @@ async fn responses_http_overload_respects_retry_limits(
     .expect("overload retries should finish the turn within 10 seconds");
 
     assert_eq!(error_events, 1);
-    let expected_messages = if retry_after.is_some() {
-        (1..=stream_max_retries)
-            .map(|retry| format!("Reconnecting... {retry}/{stream_max_retries}"))
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
+    let expected_messages = (1..=stream_max_retries)
+        .map(|retry| format!("Reconnecting... {retry}/{stream_max_retries}"))
+        .collect::<Vec<_>>();
     assert_eq!(reconnect_messages, expected_messages);
     let request_count = server
         .received_requests()
@@ -1743,13 +1739,13 @@ async fn websocket_upgrade_rejection_uses_retry_after() -> Result<()> {
         .respond_with(
             ResponseTemplate::new(/*s*/ 503)
                 .insert_header("Retry-After", "1")
-                .set_body_json(json!({ "error": { "code": "server_is_overloaded" } })),
+                .set_body_json(json!({ "error": { "code": "temporary_transport_failure" } })),
         )
         .mount(&server)
         .await;
     let http_overload = ResponseTemplate::new(/*s*/ 503)
         .insert_header("Retry-After", "0")
-        .set_body_json(json!({ "error": { "code": "server_is_overloaded" } }));
+        .set_body_json(json!({ "error": { "code": "temporary_transport_failure" } }));
     let response_mock = responses::mount_response_sequence(
         &server,
         vec![
