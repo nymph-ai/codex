@@ -574,23 +574,29 @@ fn orphan_socket_owner_helper() {
 }
 
 #[cfg(target_os = "linux")]
-#[tokio::test]
-async fn control_socket_recovers_when_a_child_briefly_retains_a_dead_owners_listener() {
-    let directory = tempfile::tempdir().unwrap();
-    let socket_path = test_socket_path(directory.path());
+fn spawn_orphan_listener(socket_path: &Path) -> std::process::ChildStdin {
     let mut helper = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
             "transport::unix_socket_tests::orphan_socket_owner_helper",
         ])
-        .env("CODEX_ORPHAN_SOCKET_HELPER", socket_path.as_path())
+        .env("CODEX_ORPHAN_SOCKET_HELPER", socket_path)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
         .unwrap();
-    let mut release = helper.stdin.take().unwrap();
+    let release = helper.stdin.take().unwrap();
     assert!(helper.wait().unwrap().success());
+    release
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn control_socket_recovers_when_a_child_briefly_retains_a_dead_owners_listener() {
+    let directory = tempfile::tempdir().unwrap();
+    let socket_path = test_socket_path(directory.path());
+    let mut release = spawn_orphan_listener(socket_path.as_path());
     // The creator has been reaped, but its child still holds the listener.
     let stream = UnixStream::connect(socket_path.as_path()).await.unwrap();
     assert!(super::unix_socket::peer_owner_has_exited(&stream));
@@ -619,4 +625,33 @@ async fn control_socket_recovers_when_a_child_briefly_retains_a_dead_owners_list
     shutdown.cancel();
     acceptor.await.unwrap();
     assert_socket_path_removed(socket_path.as_path());
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn persistent_orphan_listener_is_not_unlinked_and_does_not_hang_startup() {
+    use std::os::unix::fs::MetadataExt;
+    let directory = tempfile::tempdir().unwrap();
+    let socket_path = test_socket_path(directory.path());
+    let release = spawn_orphan_listener(socket_path.as_path());
+    let original = std::fs::symlink_metadata(socket_path.as_path()).unwrap();
+    let (tx, _rx) = mpsc::channel(CHANNEL_CAPACITY);
+    let result = timeout(
+        Duration::from_secs(3),
+        start_control_socket_acceptor(
+            socket_path.clone(),
+            tx,
+            CancellationToken::new(),
+            DaemonShutdownAccess::Disabled,
+        ),
+    )
+    .await
+    .expect("a retained listener must not block indefinitely");
+    assert!(
+        result.is_err(),
+        "a listener that still connects must not be replaced"
+    );
+    let after = std::fs::symlink_metadata(socket_path.as_path()).unwrap();
+    assert_eq!((original.dev(), original.ino()), (after.dev(), after.ino()));
+    drop(release); // EOF releases the child, including on an assertion failure.
 }
