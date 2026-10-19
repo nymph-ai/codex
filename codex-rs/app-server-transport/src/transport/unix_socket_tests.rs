@@ -583,7 +583,7 @@ fn spawn_orphan_listener(socket_path: &Path) -> std::process::ChildStdin {
         .env("CODEX_ORPHAN_SOCKET_HELPER", socket_path)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::inherit())
         .spawn()
         .unwrap();
     let release = helper.stdin.take().unwrap();
@@ -594,8 +594,14 @@ fn spawn_orphan_listener(socket_path: &Path) -> std::process::ChildStdin {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn control_socket_recovers_when_a_child_briefly_retains_a_dead_owners_listener() {
-    let directory = tempfile::tempdir().unwrap();
-    let socket_path = test_socket_path(directory.path());
+    // The helper binds directly, so use a short owned path rather than the
+    // deliberately long rendezvous aliases exercised by the other tests.
+    let directory = tempfile::Builder::new()
+        .prefix("codex-orphan-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let socket_path =
+        AbsolutePathBuf::from_absolute_path(directory.path().join("control.sock")).unwrap();
     let mut release = spawn_orphan_listener(socket_path.as_path());
     // The creator has been reaped, but its child still holds the listener.
     let stream = UnixStream::connect(socket_path.as_path()).await.unwrap();
@@ -631,8 +637,14 @@ async fn control_socket_recovers_when_a_child_briefly_retains_a_dead_owners_list
 #[tokio::test]
 async fn persistent_orphan_listener_is_not_unlinked_and_does_not_hang_startup() {
     use std::os::unix::fs::MetadataExt;
-    let directory = tempfile::tempdir().unwrap();
-    let socket_path = test_socket_path(directory.path());
+    // The helper binds directly, so use a short owned path rather than the
+    // deliberately long rendezvous aliases exercised by the other tests.
+    let directory = tempfile::Builder::new()
+        .prefix("codex-orphan-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let socket_path =
+        AbsolutePathBuf::from_absolute_path(directory.path().join("control.sock")).unwrap();
     let release = spawn_orphan_listener(socket_path.as_path());
     let original = std::fs::symlink_metadata(socket_path.as_path()).unwrap();
     let (tx, _rx) = mpsc::channel(CHANNEL_CAPACITY);
