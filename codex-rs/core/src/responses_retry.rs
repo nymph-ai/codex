@@ -133,7 +133,10 @@ pub(crate) async fn handle_response_stream_error(
     }
 
     let requires_http_fallback = err.requires_http_fallback();
-    let switched = (requires_http_fallback || retry_state.retries >= max_retries)
+    // Changing transport does not relieve model capacity or reset its retry budget.
+    let switched = (requires_http_fallback
+        || (retry_state.retries >= max_retries
+            && !matches!(err.details(), CodexErrorDetails::ServerOverloaded)))
         && client_session.try_switch_fallback_transport(
             &turn_context.session_telemetry,
             turn_context.model_info(),
