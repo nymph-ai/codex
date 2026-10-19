@@ -125,7 +125,7 @@ fn map_api_error_details(err: ApiError) -> CodexErr {
                             return CodexErr::new(CodexErrorDetails::PolicyCapacityUnavailable);
                         }
                         Some("server_is_overloaded") => return CodexErr::ServerOverloaded,
-                        Some("slow_down") => {
+                        Some("slow_down") if status == http::StatusCode::SERVICE_UNAVAILABLE => {
                             return CodexErr::new(CodexErrorDetails::RateLimitExceeded(
                                 error
                                     .get("message")
