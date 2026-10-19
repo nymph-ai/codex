@@ -893,3 +893,26 @@ fn runtime_auth_denials_stop_retries_without_losing_http_diagnostics() {
         }
     }
 }
+
+#[test]
+fn http_429_capacity_is_backpressure_without_turning_quota_into_retries() {
+    for (code, retryable) in [
+        ("server_is_overloaded", true),
+        ("insufficient_quota", false),
+    ] {
+        let error = map_api_error(ApiError::Transport(TransportError::Http {
+            status: http::StatusCode::TOO_MANY_REQUESTS,
+            url: None,
+            headers: None,
+            body: Some(serde_json::json!({"error": {"code": code}}).to_string()),
+            retry_after: None,
+        }));
+        assert_eq!(error.retry_delay(1).is_some(), retryable);
+        if retryable {
+            assert_eq!(
+                error.to_codex_protocol_error(),
+                CodexErrorInfo::ServerOverloaded
+            );
+        }
+    }
+}
