@@ -102,8 +102,10 @@ fn map_api_error_details(err: ApiError) -> CodexErr {
             } => {
                 let body_text = body.unwrap_or_default();
 
-                if status == http::StatusCode::SERVICE_UNAVAILABLE
-                    && let Ok(value) = serde_json::from_str::<serde_json::Value>(&body_text)
+                if matches!(
+                    status,
+                    http::StatusCode::SERVICE_UNAVAILABLE | http::StatusCode::TOO_MANY_REQUESTS
+                ) && let Ok(value) = serde_json::from_str::<serde_json::Value>(&body_text)
                     && let Some(error) = value.get("error")
                 {
                     match error.get("code").and_then(Value::as_str) {
