@@ -133,7 +133,7 @@ fn map_http_error_classifies_provider_codes() {
             503,
             "server_is_overloaded",
             CodexErrorInfo::ServerOverloaded,
-            false,
+            true,
         ),
         (503, "slow_down", CodexErrorInfo::RateLimitExceeded, true),
         (

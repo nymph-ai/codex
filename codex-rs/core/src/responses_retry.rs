@@ -118,6 +118,8 @@ pub(crate) async fn handle_response_stream_error(
     }
 
     if retry_state.retries >= max_retries
+        // Changing transport does not relieve model capacity and must not reset its budget.
+        && !matches!(err.details(), CodexErrorDetails::ServerOverloaded)
         && client_session.try_switch_fallback_transport(
             &turn_context.session_telemetry,
             turn_context.model_info(),
