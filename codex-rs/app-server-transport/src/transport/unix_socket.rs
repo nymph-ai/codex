@@ -266,6 +266,17 @@ async fn run_daemon_shutdown(
         .await;
 }
 
+#[cfg(target_os = "linux")]
+pub(super) fn peer_owner_has_exited(stream: &UnixStream) -> bool {
+    let Some(pid) = stream.peer_pid().ok().flatten() else {
+        return false;
+    };
+    // Only ESRCH proves absence. EPERM, unknown credentials, or PID reuse
+    // preserve the existing in-use refusal and never authorize path removal.
+    (unsafe { libc::kill(pid as libc::pid_t, 0) }) == -1
+        && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+}
+
 // Unix callers hold the physical socket's startup lock through bind and publication.
 async fn prepare_control_socket_path(socket_path: &Path) -> IoResult<()> {
     #[cfg(windows)]
@@ -275,24 +286,48 @@ async fn prepare_control_socket_path(socket_path: &Path) -> IoResult<()> {
     #[cfg(windows)]
     let socket_path = socket_path.as_path();
 
-    match UnixStream::connect(socket_path).await {
-        Ok(_stream) => {
-            return Err(std::io::Error::new(
-                ErrorKind::AddrInUse,
-                format!(
-                    "app-server control socket is already in use at {}",
-                    socket_path.display()
-                ),
-            ));
-        }
-        Err(err) if err.kind() == ErrorKind::NotFound => {}
-        Err(err) if err.kind() == ErrorKind::ConnectionRefused => {}
-        Err(err) => {
-            if !socket_path.exists() {
-                return Ok(());
+    #[cfg(target_os = "linux")]
+    let orphan_deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    loop {
+        #[cfg(target_os = "linux")]
+        let connection = tokio::time::timeout_at(orphan_deadline, UnixStream::connect(socket_path))
+            .await
+            .map_err(|_| {
+                std::io::Error::new(ErrorKind::TimedOut, "control socket probe timed out")
+            })?;
+        #[cfg(not(target_os = "linux"))]
+        let connection = UnixStream::connect(socket_path).await;
+        match connection {
+            Ok(stream) => {
+                #[cfg(target_os = "linux")]
+                if peer_owner_has_exited(&stream) && tokio::time::Instant::now() < orphan_deadline {
+                    // A forked child can retain the listener after its creator dies.
+                    // Do not unlink a socket that still accepts connections. Wait
+                    // only for this proven dead-owner state, then recheck normally.
+                    drop(stream);
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                    continue;
+                }
+                #[cfg(not(target_os = "linux"))]
+                let _ = stream;
+                return Err(std::io::Error::new(
+                    ErrorKind::AddrInUse,
+                    format!(
+                        "app-server control socket is already in use at {}",
+                        socket_path.display()
+                    ),
+                ));
             }
-            return Err(err);
+            Err(err) if err.kind() == ErrorKind::NotFound => {}
+            Err(err) if err.kind() == ErrorKind::ConnectionRefused => {}
+            Err(err) => {
+                if !socket_path.exists() {
+                    return Ok(());
+                }
+                return Err(err);
+            }
         }
+        break;
     }
 
     // A crashed daemon can leave a dangling rendezvous symlink. Only recognize
