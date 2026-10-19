@@ -115,8 +115,10 @@ fn map_api_error_details(err: ApiError) -> CodexErr {
                     return map_api_error_details(error);
                 }
 
-                if status == http::StatusCode::SERVICE_UNAVAILABLE
-                    && let Some(error) = provider_error
+                if matches!(
+                    status,
+                    http::StatusCode::SERVICE_UNAVAILABLE | http::StatusCode::TOO_MANY_REQUESTS
+                ) && let Some(error) = provider_error
                 {
                     match error.get("code").and_then(Value::as_str) {
                         Some("policy_capacity_unavailable") => {
