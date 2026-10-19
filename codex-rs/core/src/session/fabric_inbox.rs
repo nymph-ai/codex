@@ -349,7 +349,10 @@ async fn call(
             tool,
             None,
             Some(arguments),
-            Some(json!({"threadId": session.thread_id.to_string(), "fabricDelivery": "session"})),
+            Some(
+                json!({"threadId": session.thread_id.to_string(), "fabricDelivery": "session",
+                "fabricDeliveryRead": tool == "msg_inbox"}),
+            ),
             Some(Duration::from_secs(wait)),
             true,
         )
