@@ -551,3 +551,72 @@ fn assert_socket_path_removed(_socket_path: &Path) {
     // uds_windows uses a regular filesystem path as its rendezvous point,
     // but there is no Unix socket filesystem node to assert on.
 }
+
+// Run this helper in a fresh test process. Its forked child does only libc
+// calls, so it cannot reuse a Tokio runtime or allocator after fork.
+#[cfg(target_os = "linux")]
+#[test]
+fn orphan_socket_owner_helper() {
+    let Some(path) = std::env::var_os("CODEX_ORPHAN_SOCKET_HELPER") else {
+        return;
+    };
+    let _listener = std::os::unix::net::UnixListener::bind(path).unwrap();
+    let child = unsafe { libc::fork() };
+    assert!(child >= 0);
+    if child == 0 {
+        unsafe {
+            let mut release = 0_u8;
+            libc::read(libc::STDIN_FILENO, (&raw mut release).cast(), 1);
+            libc::_exit(0);
+        }
+    }
+    std::process::exit(0);
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn control_socket_recovers_when_a_child_briefly_retains_a_dead_owners_listener() {
+    let directory = tempfile::tempdir().unwrap();
+    let socket_path = test_socket_path(directory.path());
+    let mut helper = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "transport::unix_socket_tests::orphan_socket_owner_helper",
+        ])
+        .env("CODEX_ORPHAN_SOCKET_HELPER", socket_path.as_path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut release = helper.stdin.take().unwrap();
+    assert!(helper.wait().unwrap().success());
+    // The creator has been reaped, but its child still holds the listener.
+    let stream = UnixStream::connect(socket_path.as_path()).await.unwrap();
+    assert!(super::unix_socket::peer_owner_has_exited(&stream));
+    drop(stream);
+    let release_task = tokio::spawn(async move {
+        use std::io::Write;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        release.write_all(&[1]).unwrap();
+    });
+    let (tx, _rx) = mpsc::channel(CHANNEL_CAPACITY);
+    let shutdown = CancellationToken::new();
+    let acceptor = timeout(
+        Duration::from_secs(2),
+        start_control_socket_acceptor(
+            socket_path.clone(),
+            tx,
+            shutdown.clone(),
+            DaemonShutdownAccess::Disabled,
+        ),
+    )
+    .await
+    .expect("orphan recovery must be bounded")
+    .expect("the exiting child must not prevent replacement startup");
+    release_task.await.unwrap();
+    connect_to_socket(socket_path.as_path()).await.unwrap();
+    shutdown.cancel();
+    acceptor.await.unwrap();
+    assert_socket_path_removed(socket_path.as_path());
+}
