@@ -33,7 +33,11 @@ fn bootstrap_requires_kernel_mode_acknowledgement_before_reading_the_inbox() {
         "receiver"
     );
     result.is_error = Some(true);
-    assert!(payload("proc_self", result).is_err());
+    assert!(
+        payload("proc_self", result)
+            .unwrap_err()
+            .is::<KernelRefusal>()
+    );
 }
 
 #[test]
@@ -210,6 +214,9 @@ struct TestHost {
     acked: Mutex<Vec<String>>,
     fail_bootstrap: std::sync::atomic::AtomicBool,
     fail_ack: std::sync::atomic::AtomicBool,
+    refuse_ack: std::sync::atomic::AtomicUsize,
+    reconnect_count: std::sync::atomic::AtomicUsize,
+    refused: tokio::sync::Notify,
     proc_id: Mutex<String>,
     reading: tokio::sync::Notify,
     started: tokio::sync::Notify,
@@ -360,6 +367,9 @@ impl TestHost {
                 acked: Default::default(),
                 fail_bootstrap: Default::default(),
                 fail_ack: Default::default(),
+                refuse_ack: Default::default(),
+                reconnect_count: Default::default(),
+                refused: Default::default(),
                 proc_id: Mutex::new("receiver".to_string()),
                 reading: Default::default(),
                 started: Default::default(),
@@ -400,6 +410,17 @@ impl InboxHost for Arc<TestHost> {
                     .context("test inbox closed")
             }
             "msg_deliver" => {
+                if self
+                    .refuse_ack
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                    .is_ok()
+                {
+                    self.refused.notify_one();
+                    return Err(KernelRefusal {
+                        tool: tool.to_string(),
+                    }
+                    .into());
+                }
                 if self.fail_ack.swap(false, Ordering::SeqCst) {
                     bail!("lost acknowledgement response");
                 }
@@ -428,6 +449,8 @@ impl InboxHost for Arc<TestHost> {
         })
     }
     fn reconnect(&self) {
+        self.reconnect_count
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.reconnecting.notify_one();
     }
 }
@@ -536,6 +559,42 @@ async fn runtime_retries_receipts_after_reconnect_without_starting_duplicate_tur
     notified(&host.reconnecting).await;
     tokio::time::advance(Duration::from_secs(1)).await;
     notified(&host.acknowledged).await;
+    assert_eq!(host.starts.lock().unwrap().len(), 1);
+    assert_eq!(*host.acked.lock().unwrap(), vec![message(1, "receiver").id]);
+    task.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn kernel_receipt_refusals_do_not_reconnect_or_duplicate_receiving_turns() {
+    use std::sync::atomic::Ordering;
+    let (host, inbox) = TestHost::new();
+    host.refuse_ack.store(2, Ordering::SeqCst);
+    let (events, receiver) = mpsc::unbounded_channel();
+    let task = tokio::spawn(run(host.clone(), receiver));
+    inbox.send(json!([message(1, "receiver")])).unwrap();
+    notified(&host.started).await;
+    events
+        .send(Lifecycle::Finished {
+            turn_id: "fabric-turn-1".to_string(),
+            success: true,
+        })
+        .unwrap();
+    for delay in [1, 2] {
+        notified(&host.refused).await;
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(delay)).await;
+    }
+    notified(&host.acknowledged).await;
+    assert_eq!(host.reconnect_count.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        host.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|call| call.as_str() == "proc_self")
+            .count(),
+        1
+    );
     assert_eq!(host.starts.lock().unwrap().len(), 1);
     assert_eq!(*host.acked.lock().unwrap(), vec![message(1, "receiver").id]);
     task.abort();

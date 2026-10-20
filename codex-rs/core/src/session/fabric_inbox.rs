@@ -368,9 +368,18 @@ pub(crate) fn supports_kernel(capabilities: &Value) -> bool {
         == Some(&json!(1))
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("Fabric {tool} refused the request")]
+struct KernelRefusal {
+    tool: String,
+}
+
 fn payload(tool: &str, result: codex_protocol::mcp::CallToolResult) -> anyhow::Result<Value> {
     if result.is_error == Some(true) {
-        bail!("Fabric {tool} refused the request");
+        return Err(KernelRefusal {
+            tool: tool.to_string(),
+        }
+        .into());
     }
     if tool == "proc_self"
         && result
@@ -529,13 +538,21 @@ async fn run(host: impl InboxHost, mut events: mpsc::UnboundedReceiver<Lifecycle
         .await;
         match operation {
             Ok(()) => backoff = Duration::from_secs(1),
-            Err(_) => {
+            Err(error) => {
                 // Do not log bodies, credentials, or transport error strings.
-                tracing::warn!("Fabric session inbox unavailable; reconnecting");
-                host.reconnect();
-                // A new HTTP connection can attach a new proc. Never send an
-                // old proc's lifecycle or receipt through a replacement identity.
-                receiver = None;
+                if error.downcast_ref::<KernelRefusal>().is_some() {
+                    // A successful tools/call carrying isError is a kernel
+                    // refusal, not a broken connection. Keep the receiver and
+                    // pending receipts; reconnecting cannot repair admission
+                    // policy and would replace unrelated MCP clients too.
+                    tracing::warn!("Fabric session inbox request refused; retaining connection");
+                } else {
+                    tracing::warn!("Fabric session inbox unavailable; reconnecting");
+                    host.reconnect();
+                    // A new HTTP connection can attach a new proc. Never send an
+                    // old proc's lifecycle or receipt through a replacement identity.
+                    receiver = None;
+                }
                 tokio::time::sleep(backoff).await;
                 backoff = (backoff * 2).min(Duration::from_secs(30));
             }
