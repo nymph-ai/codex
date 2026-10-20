@@ -39,6 +39,15 @@ repair kernel admission policy. Pending receipts remain queued and cannot
 start another receiving turn. Diagnostic messages distinguish a refused
 request from unavailable transport without exposing response bodies.
 
+Missing session-delivery capabilities or a missing session-mode acknowledgement
+are compatibility failures, not transport loss. The receiver retains the usable
+MCP publication and retries negotiation with bounded backoff. It never probes an
+old kernel with tools/call before the capability is advertised. An explicit MCP
+configuration refresh can publish compatible capabilities and allow delivery to
+start on the next negotiation attempt. A stable incompatibility emits one diagnostic
+until the reason changes or negotiation succeeds; it does not recreate other MCP
+clients. Actual transport failures still reconnect and preserve receiver fencing.
+
 Messages retain their IDs, sender, reply correlation, and reply expectation in
 the receiving turn. They are external input, with `fabric_inbox` as the turn
 trigger. Input uses Core's atomic `StartIfIdle` admission: it queues locally

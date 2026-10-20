@@ -338,7 +338,7 @@ async fn call(
             .as_ref()
             .is_some_and(supports_kernel)
         {
-            bail!("Fabric kernel does not advertise session-owned delivery");
+            return Err(CompatibilityFailure::Capability.into());
         }
     }
     let result = session
@@ -368,6 +368,14 @@ pub(crate) fn supports_kernel(capabilities: &Value) -> bool {
         == Some(&json!(1))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+enum CompatibilityFailure {
+    #[error("kernel does not advertise session-owned delivery")]
+    Capability,
+    #[error("kernel did not acknowledge session-owned delivery")]
+    Acknowledgement,
+}
+
 #[derive(Debug, thiserror::Error)]
 #[error("Fabric {tool} refused the request")]
 struct KernelRefusal {
@@ -389,7 +397,7 @@ fn payload(tool: &str, result: codex_protocol::mcp::CallToolResult) -> anyhow::R
             .and_then(Value::as_str)
             != Some("session")
     {
-        bail!("Fabric kernel does not support session-owned delivery");
+        return Err(CompatibilityFailure::Acknowledgement.into());
     }
     if let Some(content) = result.structured_content {
         return Ok(content);
@@ -463,6 +471,7 @@ async fn run(host: impl InboxHost, mut events: mpsc::UnboundedReceiver<Lifecycle
     let mut receiver: Option<String> = None;
     let mut expected_receiver: Option<String> = None;
     let mut backoff = Duration::from_secs(1);
+    let mut incompatible = None;
     loop {
         if !host.alive() || events.is_closed() {
             return;
@@ -537,21 +546,38 @@ async fn run(host: impl InboxHost, mut events: mpsc::UnboundedReceiver<Lifecycle
         }
         .await;
         match operation {
-            Ok(()) => backoff = Duration::from_secs(1),
+            Ok(()) => {
+                backoff = Duration::from_secs(1);
+                incompatible = None;
+            }
             Err(error) => {
                 // Do not log bodies, credentials, or transport error strings.
-                if error.downcast_ref::<KernelRefusal>().is_some() {
-                    // A successful tools/call carrying isError is a kernel
-                    // refusal, not a broken connection. Keep the receiver and
-                    // pending receipts; reconnecting cannot repair admission
-                    // policy and would replace unrelated MCP clients too.
-                    tracing::warn!("Fabric session inbox request refused; retaining connection");
+                if let Some(reason) = error.downcast_ref::<CompatibilityFailure>() {
+                    // Capabilities belong to the current MCP publication. Retry
+                    // negotiation without replacing it; an explicit MCP refresh
+                    // can later publish compatible capabilities. The preflight
+                    // still prevents tools/call probes against old kernels.
+                    if incompatible != Some(*reason) {
+                        tracing::warn!(%reason, "Fabric session inbox incompatible; retaining connection");
+                    }
+                    incompatible = Some(*reason);
                 } else {
-                    tracing::warn!("Fabric session inbox unavailable; reconnecting");
-                    host.reconnect();
-                    // A new HTTP connection can attach a new proc. Never send an
-                    // old proc's lifecycle or receipt through a replacement identity.
-                    receiver = None;
+                    incompatible = None;
+                    if error.downcast_ref::<KernelRefusal>().is_some() {
+                        // A successful tools/call carrying isError is a kernel
+                        // refusal, not a broken connection. Keep the receiver and
+                        // pending receipts; reconnecting cannot repair admission
+                        // policy and would replace unrelated MCP clients too.
+                        tracing::warn!(
+                            "Fabric session inbox request refused; retaining connection"
+                        );
+                    } else {
+                        tracing::warn!("Fabric session inbox unavailable; reconnecting");
+                        host.reconnect();
+                        // A new HTTP connection can attach a new proc. Never send an
+                        // old proc's lifecycle or receipt through a replacement identity.
+                        receiver = None;
+                    }
                 }
                 tokio::time::sleep(backoff).await;
                 backoff = (backoff * 2).min(Duration::from_secs(30));
