@@ -366,6 +366,20 @@ impl ToolRouter {
         source: ToolCallSource,
         call_state: Option<Arc<ToolCallState>>,
     ) -> Result<AnyToolResult, FunctionCallError> {
+        let mut call = call;
+        // Responses Lite exposes this native tool through namespace metadata.
+        // Resolve only that exact alias, and only when the finalized plan owns
+        // a native search runtime. Ordinary namespaces and disabled search keep
+        // their existing registry/policy checks.
+        if call.tool_name == ToolName::namespaced("tool_search", "tool_search_tool")
+            && self.registry.registered_tool(&call.tool_name).is_none()
+            && self
+                .registry
+                .registered_tool(&ToolName::plain("tool_search"))
+                .is_some_and(|tool| matches!(tool.runtime.spec(), ToolSpec::ToolSearch { .. }))
+        {
+            call.tool_name = ToolName::plain("tool_search").with_default_namespace();
+        }
         let ToolCall {
             tool_name,
             call_id,

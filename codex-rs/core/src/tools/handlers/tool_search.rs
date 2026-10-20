@@ -220,7 +220,7 @@ impl ToolSearchHandler {
 
         let args = match payload {
             ToolPayload::ToolSearch { arguments } => arguments,
-            ToolPayload::Function { arguments } if nested => super::parse_arguments(&arguments)?,
+            ToolPayload::Function { arguments } => super::parse_arguments(&arguments)?,
             _ => {
                 return Err(FunctionCallError::Fatal(format!(
                     "{TOOL_SEARCH_TOOL_NAME} handler received unsupported payload"
