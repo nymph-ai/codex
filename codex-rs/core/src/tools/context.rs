@@ -237,7 +237,11 @@ impl ToolOutput for ToolSearchOutput {
         true
     }
 
-    fn to_response_item(&self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
+    fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+        if matches!(payload, ToolPayload::Function { .. }) {
+            return codex_tools::JsonToolOutput::new(serde_json::json!({"tools": self.tools}))
+                .to_response_item(call_id, payload);
+        }
         ResponseInputItem::ToolSearchOutput {
             call_id: call_id.to_string(),
             status: "completed".to_string(),
