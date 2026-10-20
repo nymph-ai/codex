@@ -32,6 +32,12 @@ The receiver holds `msg_inbox` open through the session's own MCP connection.
 The kernel wakes the read when a message arrives. Empty deadline responses
 renew the held read; transport failures trigger bounded exponential reconnect
 backoff. There is no separate inbox polling process or native turn injection.
+Kernel tool refusals (`tools/call` with `isError`) use bounded retry backoff
+on the existing connection. They do not clear the attached receiver identity
+or request a fresh MCP publication: reconnecting a usable transport cannot
+repair kernel admission policy. Pending receipts remain queued and cannot
+start another receiving turn. Diagnostic messages distinguish a refused
+request from unavailable transport without exposing response bodies.
 
 Messages retain their IDs, sender, reply correlation, and reply expectation in
 the receiving turn. They are external input, with `fabric_inbox` as the turn
