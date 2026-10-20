@@ -660,3 +660,139 @@ fn namespace_function_names(specs: &[ToolSpec], namespace_name: &str) -> Vec<Str
         })
         .unwrap_or_default()
 }
+
+#[tokio::test]
+async fn advertised_native_search_function_alias_dispatches() -> anyhow::Result<()> {
+    let (session, mut turn) = make_session_and_context().await;
+    crate::session::tests::update_turn_settings_for_test(&mut turn, |settings| {
+        let model = Arc::make_mut(&mut settings.model_info);
+        model.supports_search_tool = true;
+        model.use_responses_lite = true;
+    });
+    let mut config = (*turn.config).clone();
+    config.features.disable(codex_features::Feature::CodeMode)?;
+    config.tool_registry.turn_metadata_includes_tool_info = true;
+    turn.config = Arc::new(config);
+    let turn = Arc::new(turn);
+    let step_context = StepContext::for_test(Arc::clone(&turn));
+    let router = test_tool_router(
+        step_context.as_ref(),
+        vec![RegisteredTool {
+            exposure: ToolExposure::Deferred,
+            ..mcp_runtime(mcp_tool_info(
+                "searchable",
+                true,
+                "mcp__searchable",
+                "lookup",
+            ))
+        }],
+        Vec::new(),
+        &turn.dynamic_tools,
+    );
+    assert!(
+        router
+            .model_visible_specs()
+            .iter()
+            .any(|spec| matches!(spec, ToolSpec::ToolSearch { .. }))
+    );
+    let info = router
+        .tool_namespaces_info()
+        .expect("advertised namespaces");
+    assert!(
+        info["tool_search"]
+            .functions
+            .contains_key("tool_search_tool")
+    );
+    let session = Arc::new(session);
+    for (index, item) in [
+        json!({"type": "tool_search_call", "call_id": "native", "execution": "client", "arguments": {"query": "lookup"}}),
+        json!({"type": "function_call", "call_id": "alias", "namespace": "tool_search", "name": "tool_search_tool", "arguments": "{\"query\":\"lookup\"}"}),
+    ].into_iter().enumerate() {
+        let call = ToolRouter::build_tool_call(serde_json::from_value(item)?)?.expect("call");
+        let result = router.dispatch_tool_call_with_code_mode_result(
+            Arc::clone(&session), Arc::clone(&step_context), CancellationToken::new(),
+            Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())), call, ToolCallSource::Direct,
+        ).await;
+        assert!(result.is_ok(), "advertised discovery form {index} rejected: {:?}", result.err());
+        let output = result?.into_response().item;
+        match (index, output) {
+            (0, ResponseItem::ToolSearchOutput { call_id, tools, .. }) => {
+                assert_eq!(call_id.as_deref(), Some("native"));
+                assert!(!tools.is_empty(), "native discovery lost its deferred tools");
+            }
+            (1, ResponseItem::FunctionCallOutput { call_id, output, .. }) => {
+                assert_eq!(call_id.as_deref(), Some("alias"));
+                let FunctionCallOutputBody::Text(text) = output.body else {
+                    panic!("expected discovery JSON output");
+                };
+                let value: serde_json::Value = serde_json::from_str(&text)?;
+                assert!(!value["tools"].as_array().expect("discovered tools").is_empty());
+            }
+            (_, output) => panic!("discovery form {index} returned wrong protocol output: {output:?}"),
+        }
+
+    }
+    for (namespace, name) in [
+        ("other_search", "tool_search_tool"),
+        ("tool_search", "other_tool"),
+    ] {
+        let call = ToolRouter::build_tool_call(serde_json::from_value(json!({
+            "type": "function_call", "call_id": "wrong-namespace", "namespace": namespace,
+            "name": name, "arguments": "{\"query\":\"lookup\"}",
+        }))?)?
+        .expect("function call");
+        assert!(
+            router
+                .dispatch_tool_call_with_code_mode_result(
+                    Arc::clone(&session),
+                    Arc::clone(&step_context),
+                    CancellationToken::new(),
+                    Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+                    call,
+                    ToolCallSource::Direct,
+                )
+                .await
+                .is_err(),
+            "unrelated namespace/function gained native search access"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_search_alias_does_not_enable_disabled_search() -> anyhow::Result<()> {
+    let (session, mut turn) = make_session_and_context().await;
+    crate::session::tests::update_turn_settings_for_test(&mut turn, |settings| {
+        Arc::make_mut(&mut settings.model_info).supports_search_tool = false;
+    });
+    let turn = Arc::new(turn);
+    let step_context = StepContext::for_test(Arc::clone(&turn));
+    let router = test_tool_router(
+        step_context.as_ref(),
+        Vec::new(),
+        Vec::new(),
+        &turn.dynamic_tools,
+    );
+    assert!(
+        router
+            .registered_tool(&ToolName::plain("tool_search"))
+            .is_none()
+    );
+    let call = ToolRouter::build_tool_call(serde_json::from_value(json!({
+        "type": "function_call", "call_id": "disabled-search", "namespace": "tool_search",
+        "name": "tool_search_tool", "arguments": "{\"query\":\"lookup\"}",
+    }))?)?
+    .expect("function call");
+    let result = router
+        .dispatch_tool_call_with_code_mode_result(
+            Arc::new(session),
+            step_context,
+            CancellationToken::new(),
+            Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+            call,
+            ToolCallSource::Direct,
+        )
+        .await;
+    assert!(result.is_err(), "alias bypassed disabled native search");
+    Ok(())
+}
