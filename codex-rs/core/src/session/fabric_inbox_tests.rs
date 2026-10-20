@@ -26,7 +26,11 @@ fn bootstrap_requires_kernel_mode_acknowledgement_before_reading_the_inbox() {
         is_error: Some(false),
         meta: None,
     };
-    assert!(payload("proc_self", result.clone()).is_err());
+    assert!(
+        payload("proc_self", result.clone())
+            .unwrap_err()
+            .is::<CompatibilityFailure>()
+    );
     result.meta = Some(json!({"fabricDelivery": "session"}));
     assert_eq!(
         payload("proc_self", result.clone()).unwrap()["id"],
@@ -215,6 +219,9 @@ struct TestHost {
     fail_bootstrap: std::sync::atomic::AtomicBool,
     fail_ack: std::sync::atomic::AtomicBool,
     refuse_ack: std::sync::atomic::AtomicUsize,
+    incompatible_bootstrap: std::sync::atomic::AtomicUsize,
+    compatibility_reason: Mutex<CompatibilityFailure>,
+    incompatible: tokio::sync::Notify,
     reconnect_count: std::sync::atomic::AtomicUsize,
     refused: tokio::sync::Notify,
     proc_id: Mutex<String>,
@@ -368,6 +375,9 @@ impl TestHost {
                 fail_bootstrap: Default::default(),
                 fail_ack: Default::default(),
                 refuse_ack: Default::default(),
+                incompatible_bootstrap: Default::default(),
+                compatibility_reason: Mutex::new(CompatibilityFailure::Capability),
+                incompatible: Default::default(),
                 reconnect_count: Default::default(),
                 refused: Default::default(),
                 proc_id: Mutex::new("receiver".to_string()),
@@ -393,6 +403,14 @@ impl InboxHost for Arc<TestHost> {
         self.calls.lock().unwrap().push(tool.to_string());
         match tool {
             "proc_self" => {
+                if self
+                    .incompatible_bootstrap
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                    .is_ok()
+                {
+                    self.incompatible.notify_one();
+                    return Err((*self.compatibility_reason.lock().unwrap()).into());
+                }
                 if self.fail_bootstrap.swap(false, Ordering::SeqCst) {
                     bail!("kernel restarting");
                 }
@@ -630,4 +648,43 @@ async fn replacement_identity_cannot_acknowledge_the_original_sessions_messages(
         1
     );
     task.abort();
+}
+
+async fn incompatible_publication_keeps_transport(reason: CompatibilityFailure) {
+    use std::sync::atomic::Ordering;
+    let (host, inbox) = TestHost::new();
+    *host.compatibility_reason.lock().unwrap() = reason;
+    host.incompatible_bootstrap.store(2, Ordering::SeqCst);
+    let (events, receiver) = mpsc::unbounded_channel();
+    let task = tokio::spawn(run(host.clone(), receiver));
+    for delay in [1, 2] {
+        notified(&host.incompatible).await;
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(delay)).await;
+    }
+    notified(&host.reading).await;
+    assert_eq!(host.reconnect_count.load(Ordering::SeqCst), 0);
+    assert!(host.starts.lock().unwrap().is_empty());
+    inbox.send(json!([message(1, "receiver")])).unwrap();
+    notified(&host.started).await;
+    events
+        .send(Lifecycle::Finished {
+            turn_id: "fabric-turn-1".to_string(),
+            success: true,
+        })
+        .unwrap();
+    notified(&host.acknowledged).await;
+    assert_eq!(host.starts.lock().unwrap().len(), 1);
+    assert_eq!(*host.acked.lock().unwrap(), vec![message(1, "receiver").id]);
+    task.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn missing_capability_does_not_recreate_a_usable_transport() {
+    incompatible_publication_keeps_transport(CompatibilityFailure::Capability).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn missing_session_acknowledgement_does_not_recreate_a_usable_transport() {
+    incompatible_publication_keeps_transport(CompatibilityFailure::Acknowledgement).await;
 }
