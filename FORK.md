@@ -11,10 +11,9 @@ verified on 2026-10-18. The Rust workspace declares version `0.163.0`.
 
 Fork changes include Fabric thread identity and catalog refresh, daemon-mediated
 MCP OAuth token leasing, shared authentication refresh serialization, display
-limits, and the opt-in session-owned Fabric inbox. The inbox belongs to each
-thread inside the existing app-server daemon. See
-[the receiver design](docs/fabric-session-inbox.md) for delivery semantics and
-rollout limits. It remains disabled by default.
+limits and bounded model-capacity retries. Fabric hosts Codex over ACP and pushes
+its inbox in as prompts, so the fork carries no Fabric delivery code; it carries
+only changes that make Codex itself better.
 
 ## Updating upstream
 

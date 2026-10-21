@@ -937,9 +937,6 @@
             "external_migration": {
               "type": "boolean"
             },
-            "fabric_session_inbox": {
-              "type": "boolean"
-            },
             "fast_mode": {
               "type": "boolean"
             },
@@ -7266,9 +7263,6 @@
           "type": "boolean"
         },
         "external_migration": {
-          "type": "boolean"
-        },
-        "fabric_session_inbox": {
           "type": "boolean"
         },
         "fast_mode": {

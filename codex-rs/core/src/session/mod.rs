@@ -253,7 +253,6 @@ mod reasoning_effort;
 mod submission;
 pub(crate) use reasoning_effort::RequestEffortUsage;
 pub(crate) use submission::Submission;
-pub(crate) mod fabric_inbox;
 mod input_queue;
 mod mcp;
 mod mcp_prewarm;

@@ -363,14 +363,6 @@ impl Session {
         // Materialize before connection identity/caching so two threads cannot
         // share a connector that carries one thread's native authority.
         let mut configured = codex_mcp::configured_mcp_servers(&config);
-        if super::fabric_inbox::enabled(&desired.config, &desired.session_source)
-            && let Some(server) = configured.get_mut("fabric")
-        {
-            // Connection identity is session-owned, including before the first
-            // model turn. Stable headers also let the kernel reattach this proc
-            // after an HTTP/kernel restart instead of creating a sibling inbox.
-            super::fabric_inbox::bind_identity(server, self.thread_id);
-        }
         for server in configured.values_mut() {
             if !server.is_local_environment() {
                 continue;

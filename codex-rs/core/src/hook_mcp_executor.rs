@@ -13,7 +13,6 @@ pub(crate) struct CoreHookMcpExecutor {
     pub(crate) runtime: Arc<McpRuntime>,
     // Session-scoped MCP tools require the owning thread ID in request metadata.
     pub(crate) thread_id: ThreadId,
-    pub(crate) session_owned_fabric: bool,
 }
 
 impl HookMcpExecutor for CoreHookMcpExecutor {
@@ -24,22 +23,6 @@ impl HookMcpExecutor for CoreHookMcpExecutor {
                 "threadId".to_string(),
                 Value::String(self.thread_id.to_string()),
             );
-            if self.session_owned_fabric && call.server == "fabric" {
-                // Hooks are background callers too: an unsupported kernel
-                // must never hand its legacy inbox to an unseen hook result.
-                if !self
-                    .runtime
-                    .latest_server_capabilities("fabric")
-                    .as_ref()
-                    .is_some_and(crate::session::fabric_inbox::supports_kernel)
-                {
-                    bail!("Fabric kernel does not advertise session-owned delivery");
-                }
-                metadata.insert(
-                    "fabricDelivery".to_string(),
-                    Value::String("session".to_string()),
-                );
-            }
 
             let result = self
                 .runtime
