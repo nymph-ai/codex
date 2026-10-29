@@ -11,7 +11,6 @@ use tracing::warn;
 use super::McpConnectionSet;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::rmcp_client::list_tools_for_client_uncached;
-use crate::tools::ToolInfo;
 
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
 const RETRY_DELAY: Duration = Duration::from_secs(1);
@@ -50,21 +49,6 @@ impl McpConnectionSet {
                 generations.insert(server_name.clone(), Some(generation));
                 continue;
             }
-            // Connection sets that share a client (a reconciled set reuses the
-            // previous one's connection) keep separate generations. If another
-            // reader already installed a listing fetched after every notice
-            // this transport has seen, adopt it rather than list again.
-            if let Some(client) = view.connection.client.ready_client() {
-                let notifications = client.client.tool_list_revision();
-                if notifications.current() > 0
-                    && client.tool_catalog.notifications_current(&notifications)
-                {
-                    state.generation = generation;
-                    state.retry_at = None;
-                    generations.insert(server_name.clone(), Some(generation));
-                    continue;
-                }
-            }
             generations.insert(server_name.clone(), None);
             if state
                 .retry_at
@@ -78,35 +62,22 @@ impl McpConnectionSet {
                 .min(REFRESH_TIMEOUT);
             let result = tokio::time::timeout(timeout, async {
                 let client = view.connection.client().await?;
-                // Upstream tracks the same notifications on the transport
-                // (mcp_tool_list_changed). Read its count before fetching, so
-                // a notice that arrives during this listing stays pending.
-                let listed_notifications = client.client.tool_list_revision().current();
                 // Publish through the client's own catalog: it advances the
                 // revision under its write lock, so calls prepared at the old
                 // revision are rejected and no parallel override map exists.
                 client
                     .tool_catalog
-                    .refresh(
-                        || async {
-                            list_tools_for_client_uncached(
-                                server_name,
-                                /*is_codex_apps_mcp_server*/ false,
-                                "notification",
-                                &client.client,
-                                Some(timeout),
-                                view.catalog_item_limit,
-                                client.server_instructions.as_deref(),
-                            )
-                            .await
-                            .map(|(tools, meta)| (tools, meta, ()))
-                        },
-                        |_tools: &[ToolInfo], _meta, ()| {
-                            client
-                                .tool_catalog
-                                .acknowledge_notifications(listed_notifications)
-                        },
-                    )
+                    .refresh_notified(&client.client.tool_list_revision(), || {
+                        list_tools_for_client_uncached(
+                            server_name,
+                            /*is_codex_apps_mcp_server*/ false,
+                            "notification",
+                            &client.client,
+                            Some(timeout),
+                            view.catalog_item_limit,
+                            client.server_instructions.as_deref(),
+                        )
+                    })
                     .await?;
                 Ok::<(), anyhow::Error>(())
             })
