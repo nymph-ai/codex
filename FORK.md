@@ -5,9 +5,9 @@ is implemented and reviewed as ordinary commits in the source tree. Building the
 fork does not require applying Codex source patches from the NymphAI monorepo.
 Patches for external build dependencies are separate from the Codex source fork.
 
-The current upstream baseline is `rust-v0.165.0`
-(`360319d8dee62d87e2d59fc0c21805d79519cfed`), the latest stable upstream release
-verified on 2026-10-29. The Rust workspace declares version `0.165.0`.
+The current upstream baseline is `rust-v0.166.0`
+(`6ff1e1ca3b30fc8b914720681fcf5fe62e95f856`), the latest stable upstream release
+verified on 2026-10-29. The Rust workspace declares version `0.166.0`.
 
 Fork changes include Fabric thread identity and catalog refresh, daemon-mediated
 MCP OAuth token leasing, shared authentication refresh serialization, display
@@ -25,7 +25,7 @@ source; regenerate protocol schemas from the rebased Rust definitions. Do not
 restore older generated bundles over upstream's new schemas.
 
 Verify the release is an ancestor with `git merge-base --is-ancestor
-rust-v0.165.0 HEAD`. Compile and test through the monorepo's BuildBuddy RBE
+rust-v0.166.0 HEAD`. Compile and test through the monorepo's BuildBuddy RBE
 workflow; Buildkite qualifies release artifacts. Publish a candidate branch
 before promoting the maintained `fabric-patchset` release branch. Never force
 push the default branch as part of a rebase.
