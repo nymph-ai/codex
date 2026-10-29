@@ -5,16 +5,15 @@ is implemented and reviewed as ordinary commits in the source tree. Building the
 fork does not require applying Codex source patches from the NymphAI monorepo.
 Patches for external build dependencies are separate from the Codex source fork.
 
-The current upstream baseline is `rust-v0.163.0`
-(`83086188ae0614bd882818ff1aa23f3194962012`), the latest stable upstream release
-verified on 2026-10-18. The Rust workspace declares version `0.163.0`.
+The current upstream baseline is `rust-v0.165.0`
+(`360319d8dee62d87e2d59fc0c21805d79519cfed`), the latest stable upstream release
+verified on 2026-10-29. The Rust workspace declares version `0.165.0`.
 
 Fork changes include Fabric thread identity and catalog refresh, daemon-mediated
 MCP OAuth token leasing, shared authentication refresh serialization, display
-limits, and the opt-in session-owned Fabric inbox. The inbox belongs to each
-thread inside the existing app-server daemon. See
-[the receiver design](docs/fabric-session-inbox.md) for delivery semantics and
-rollout limits. It remains disabled by default.
+limits and bounded model-capacity retries. Fabric hosts Codex over ACP and pushes
+its inbox in as prompts, so the fork carries no Fabric delivery code; it carries
+only changes that make Codex itself better.
 
 ## Updating upstream
 
@@ -26,7 +25,7 @@ source; regenerate protocol schemas from the rebased Rust definitions. Do not
 restore older generated bundles over upstream's new schemas.
 
 Verify the release is an ancestor with `git merge-base --is-ancestor
-rust-v0.163.0 HEAD`. Compile and test through the monorepo's BuildBuddy RBE
+rust-v0.165.0 HEAD`. Compile and test through the monorepo's BuildBuddy RBE
 workflow; Buildkite qualifies release artifacts. Publish a candidate branch
 before promoting the maintained `fabric-patchset` release branch. Never force
 push the default branch as part of a rebase.
