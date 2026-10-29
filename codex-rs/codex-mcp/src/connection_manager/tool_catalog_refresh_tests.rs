@@ -262,7 +262,7 @@ async fn http_notifications_refresh_model_bindings_and_preserve_server_scope() {
         .call_tool(
             "notify".to_string(),
             /*arguments*/ None,
-            /*meta*/ None,
+            |_| Ok(None),
             Some(Duration::from_secs(5)),
         )
         .await
@@ -316,7 +316,7 @@ async fn http_notifications_refresh_model_bindings_and_preserve_server_scope() {
         .call_tool(
             "notify".to_string(),
             /*arguments*/ None,
-            /*meta*/ None,
+            |_| Ok(None),
             Some(Duration::from_secs(5)),
         )
         .await
@@ -370,7 +370,7 @@ async fn http_notifications_refresh_model_bindings_and_preserve_server_scope() {
         .call_tool(
             "notify".to_string(),
             /*arguments*/ None,
-            /*meta*/ None,
+            |_| Ok(None),
             Some(Duration::from_secs(5)),
         )
         .await
@@ -420,7 +420,7 @@ async fn http_notice_during_list_is_not_acknowledged_by_that_list() {
         .call_tool(
             "notify".to_string(),
             /*arguments*/ None,
-            /*meta*/ None,
+            |_| Ok(None),
             Some(Duration::from_secs(5)),
         )
         .await
@@ -484,7 +484,7 @@ async fn http_catalog_publication_waits_for_inflight_prepared_calls() {
             .call_tool(
                 "notify".to_string(),
                 /*arguments*/ None,
-                /*meta*/ None,
+                |_| Ok(None),
                 Some(Duration::from_secs(5)),
             )
             .await
