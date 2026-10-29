@@ -201,6 +201,8 @@ impl CatalogHttpServer {
         .await
         .unwrap();
         let managed = ManagedClient {
+            connection_sharing: Default::default(),
+            shared_elicitation: None,
             _auth_change_notifications: None,
             client,
             server_info: create_test_server_info(name),
@@ -221,6 +223,7 @@ impl CatalogHttpServer {
             tool_catalog_cache_context: None,
             startup_complete: Arc::new(AtomicBool::new(true)),
             startup_reconnect: None,
+            connection_slot: None,
             cancel_token: CancellationToken::new(),
         }
     }
