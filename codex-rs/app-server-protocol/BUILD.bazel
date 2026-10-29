@@ -65,6 +65,11 @@ rust_binary(
     edition = "2024",
     rustc_env = {
         "BAZEL_PACKAGE": "codex-rs/app-server-protocol",
+        # Execroot-relative, so the generator never embeds the absolute
+        # working directory of the action that compiled it (hermetic
+        # process_wrappers refuse that), and still resolves when the fork is
+        # built as an external repository.
+        "CARGO_MANIFEST_DIR": ("external/" + repo_name() + "/" if repo_name() else "") + package_name(),
         "CARGO_PKG_NAME": "codex-app-server-protocol",
     },
     # This short-lived exporter sits on application builds' critical path. Avoid
