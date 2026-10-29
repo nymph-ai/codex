@@ -189,7 +189,7 @@ impl CatalogHttpServer {
             )
             .await
             .unwrap();
-        let tools = list_tools_for_client_uncached(
+        let (tools, meta) = list_tools_for_client_uncached(
             name,
             /*is_codex_apps_mcp_server*/ false,
             "initial",
@@ -204,13 +204,15 @@ impl CatalogHttpServer {
             _auth_change_notifications: None,
             client,
             server_info: create_test_server_info(name),
-            tool_catalog: Arc::new(ClientToolCatalog::new(tools, /*updates*/ None)),
+            tool_catalog: Arc::new(ClientToolCatalog::new(tools, meta, /*updates*/ None)),
             tool_timeout: Some(Duration::from_secs(5)),
             server_instructions: None,
             server_supports_sandbox_state_meta_capability: false,
+            client_supports_network_policy_meta_capability: false,
             codex_apps_tools_cache_context: None,
         };
         AsyncManagedClient {
+            ema_authority: None,
             client: futures::future::ready(Ok(managed)).boxed().shared(),
             is_codex_apps_mcp_server: false,
             cached_server_info: None,
