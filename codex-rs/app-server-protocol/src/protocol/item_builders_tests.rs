@@ -34,7 +34,7 @@ fn client_display_cap_preserves_unicode_ends_and_full_source_events() {
         duration: std::time::Duration::from_millis(12),
         status: codex_protocol::protocol::ExecCommandStatus::Completed,
     };
-    let ThreadItem::CommandExecution {
+    let ThreadItemPayload::CommandExecution {
         aggregated_output, ..
     } = build_command_execution_end_item(&event)
     else {
