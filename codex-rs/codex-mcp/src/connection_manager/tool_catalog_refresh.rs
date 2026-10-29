@@ -50,6 +50,21 @@ impl McpConnectionSet {
                 generations.insert(server_name.clone(), Some(generation));
                 continue;
             }
+            // Connection sets that share a client (a reconciled set reuses the
+            // previous one's connection) keep separate generations. If another
+            // reader already installed a listing fetched after every notice
+            // this transport has seen, adopt it rather than list again.
+            if let Some(client) = view.connection.client.ready_client() {
+                let notifications = client.client.tool_list_revision();
+                if notifications.current() > 0
+                    && client.tool_catalog.notifications_current(&notifications)
+                {
+                    state.generation = generation;
+                    state.retry_at = None;
+                    generations.insert(server_name.clone(), Some(generation));
+                    continue;
+                }
+            }
             generations.insert(server_name.clone(), None);
             if state
                 .retry_at
