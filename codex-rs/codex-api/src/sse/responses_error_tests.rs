@@ -47,15 +47,26 @@ async fn policy_capacity_classification_preserves_overload_retry_behavior() {
             }))
             .unwrap();
             let error = map_api_error(process_responses_event(event).unwrap_err().into_api_error());
+            // The fork backs off on a headerless overload (bounded, jittered);
+            // policy capacity without advice stays terminal as upstream has it.
+            let delay = error.retry_delay(/*retry_count*/ 1);
+            let backpressure =
+                retry_after.is_none() && expected == CodexErrorInfo::ServerOverloaded;
             assert_eq!(
                 (
                     error.to_codex_protocol_error(),
-                    error.retry_delay(/*retry_count*/ 1),
+                    if backpressure {
+                        delay
+                            .filter(|delay| *delay <= Duration::from_secs(60))
+                            .map(|_| Duration::from_secs(3))
+                    } else {
+                        delay
+                    },
                     error.to_string()
                 ),
                 (
                     expected.clone(),
-                    retry_after.map(|_| Duration::from_secs(3)),
+                    (retry_after.is_some() || backpressure).then_some(Duration::from_secs(3)),
                     if expected == CodexErrorInfo::PolicyCapacityUnavailable {
                         "Policy-restricted capacity is unavailable. Please try again later."
                     } else {

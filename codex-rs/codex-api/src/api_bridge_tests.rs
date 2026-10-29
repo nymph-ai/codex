@@ -34,16 +34,26 @@ async fn http_policy_capacity_preserves_retry_advice_and_terminal_behavior() {
                 ),
                 retry_after: advice,
             }));
+            // The fork backs off on a headerless overload (bounded, jittered);
+            // policy capacity without advice stays terminal as upstream has it.
+            let delay = error.retry_delay(/*retry_count*/ 1);
+            let backpressure = advice.is_none() && expected == CodexErrorInfo::ServerOverloaded;
             assert_eq!(
                 (
                     error.to_codex_protocol_error(),
                     error.retry_after(),
-                    error.retry_delay(/*retry_count*/ 1)
+                    if backpressure {
+                        delay
+                            .filter(|delay| *delay <= Duration::from_secs(60))
+                            .map(|_| Duration::from_secs(3))
+                    } else {
+                        delay
+                    }
                 ),
                 (
                     expected.clone(),
                     advice,
-                    advice.map(|_| Duration::from_secs(3))
+                    (advice.is_some() || backpressure).then_some(Duration::from_secs(3))
                 )
             );
         }
