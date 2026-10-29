@@ -6011,18 +6011,19 @@ async fn reconciliation_reuses_connection_without_relisting_regular_tools() -> a
     let failed = tokio::time::timeout(Duration::from_secs(3), capture_binding(&reconciled))
         .await
         .expect("refresh must use the reconciled timeout");
-    assert_eq!(failed.tools(), old_step.tools());
-    assert_eq!(
-        failed.list_all_resources(|_| true).await,
-        HashMap::from([("docs".to_string(), vec![])])
-    );
+    // Fork (NYM-1200): a notified server whose refresh fails is left out of
+    // the new binding rather than served from its previous catalog, which may
+    // still offer a tool the server has withdrawn. Upstream keeps the old
+    // catalog here; the fork deliberately does not.
+    assert!(failed.tools().is_empty());
+    assert_eq!(failed.list_all_resources(|_| true).await, HashMap::new());
     assert_eq!(
         failed.list_all_resource_templates(|_| true).await,
-        HashMap::from([("docs".to_string(), vec![])])
+        HashMap::new()
     );
     let retry_started = tokio::time::Instant::now();
     let retry = capture_binding(&reconciled).await;
-    assert_eq!(retry.tools(), old_step.tools());
+    assert!(retry.tools().is_empty());
     assert_eq!(retry_started.elapsed(), Duration::ZERO);
     block_tool_listing.store(false, Ordering::Release);
     tokio::time::advance(Duration::from_secs(5)).await;

@@ -168,6 +168,14 @@ impl ClientToolCatalog {
         }
     }
 
+    /// Record that a listing fetched after `revision` notifications is installed.
+    /// The fork's notified refresh (NYM-1200) publishes through `refresh`, which
+    /// would otherwise leave upstream's tracker pending and the catalog unready.
+    pub(crate) fn acknowledge_notifications(&self, revision: u64) {
+        self.listed_notification_revision
+            .fetch_max(revision, Ordering::AcqRel);
+    }
+
     pub(crate) fn notifications_current(&self, notifications: &ToolListRevision) -> bool {
         self.listed_notification_revision.load(Ordering::Acquire) == notifications.current()
     }
