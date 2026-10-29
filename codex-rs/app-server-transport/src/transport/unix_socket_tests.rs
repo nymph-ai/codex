@@ -621,6 +621,7 @@ async fn control_socket_recovers_when_a_child_briefly_retains_a_dead_owners_list
             tx,
             shutdown.clone(),
             DaemonShutdownAccess::Disabled,
+            WebSocketCompression::Plain,
         ),
     )
     .await
@@ -655,6 +656,7 @@ async fn persistent_orphan_listener_is_not_unlinked_and_does_not_hang_startup() 
             tx,
             CancellationToken::new(),
             DaemonShutdownAccess::Disabled,
+            WebSocketCompression::Plain,
         ),
     )
     .await
