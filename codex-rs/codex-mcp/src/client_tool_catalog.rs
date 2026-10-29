@@ -168,14 +168,6 @@ impl ClientToolCatalog {
         }
     }
 
-    /// Record that a listing fetched after `revision` notifications is installed.
-    /// The fork's notified refresh (NYM-1200) publishes through `refresh`, which
-    /// would otherwise leave upstream's tracker pending and the catalog unready.
-    pub(crate) fn acknowledge_notifications(&self, revision: u64) {
-        self.listed_notification_revision
-            .fetch_max(revision, Ordering::AcqRel);
-    }
-
     pub(crate) fn notifications_current(&self, notifications: &ToolListRevision) -> bool {
         self.listed_notification_revision.load(Ordering::Acquire) == notifications.current()
     }
@@ -238,6 +230,43 @@ impl ClientToolCatalog {
             .is_err()
             .then(|| Instant::now() + NOTIFICATION_REFRESH_COOLDOWN);
         result
+    }
+
+    /// The fork's notified refresh (NYM-1200). Like `refresh`, publication waits for calls
+    /// admitted against the previous catalog. It also keeps upstream's notification tracker
+    /// current: the count is read before fetching, so a notice that arrives during the listing
+    /// stays pending, and a reader that finds a listing already installed for every notice (a
+    /// connection set sharing this client refreshed first) adopts it instead of listing again.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "refreshes must remain serialized through fetching and catalog publication"
+    )]
+    pub(crate) async fn refresh_notified<F, Fut>(
+        &self,
+        notifications: &ToolListRevision,
+        fetch: F,
+    ) -> Result<()>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<(Vec<ToolInfo>, Option<Arc<serde_json::Value>>)>>,
+    {
+        let _refresh = self.refresh_lock.lock().await;
+        let revision = notifications.current();
+        if revision > 0 && self.listed_notification_revision.load(Ordering::Acquire) == revision {
+            return Ok(());
+        }
+        let (tools, meta) = fetch().await?;
+        let _calls = self.calls.write().await;
+        let mut current = self.current.write().await;
+        current.source = CatalogSource::Local {
+            tools: tools.into(),
+            meta,
+        };
+        current.revision += 1;
+        current.last_refresh_revision = current.revision;
+        self.listed_notification_revision
+            .fetch_max(revision, Ordering::AcqRel);
+        Ok(())
     }
 
     /// Serialize fetching and publication, leaving the current catalog usable during the fetch.
