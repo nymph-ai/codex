@@ -6027,13 +6027,17 @@ async fn reconciliation_reuses_connection_without_relisting_regular_tools() -> a
     assert_eq!(retry_started.elapsed(), Duration::ZERO);
     block_tool_listing.store(false, Ordering::Release);
     tokio::time::advance(Duration::from_secs(5)).await;
+    // Fork (NYM-1200): publishing a notified catalog waits for calls admitted
+    // against the old one (see tool_catalog_refresh_tests::
+    // http_catalog_publication_waits_for_inflight_prepared_calls), where
+    // upstream publishes alongside them. Finish the admitted call first.
+    release.send(()).unwrap();
+    call.await?.expect_err("test stops before dispatch");
     let (first, second) = tokio::time::timeout(Duration::from_secs(1), async {
         tokio::join!(capture_binding(&previous), capture_binding(&reconciled))
     })
     .await
-    .expect("notification refresh must not wait for a running call");
-    release.send(()).unwrap();
-    call.await?.expect_err("test stops before dispatch");
+    .expect("notification refresh completes once the admitted call finishes");
     assert_eq!(first.tools(), second.tools());
     assert_eq!(
         model_tool_names(first.tools()),
