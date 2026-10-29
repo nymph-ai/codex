@@ -2,6 +2,13 @@
 
 load("@bazel_lib//lib:copy_file.bzl", "COPY_FILE_TOOLCHAINS", "copy_file_action")
 
+def _package_prefix(ctx):
+    # Compare execution paths, which name an external repository's sources
+    # under its workspace root, so the rules also work when this repository is
+    # consumed as an external one (short_path would start with "../<repo>/").
+    root = ctx.label.workspace_root
+    return (root + "/" if root else "") + ctx.label.package + "/"
+
 def _schema_bundle_impl(ctx):
     outputs = []
     for mode in ["stable", "experimental"]:
@@ -46,11 +53,11 @@ schema_bundle = rule(
 def _schema_sources_impl(ctx):
     sources = []
     crate_root = None
-    prefix = ctx.label.package + "/"
+    prefix = _package_prefix(ctx)
     for source in ctx.files.srcs:
-        if not source.short_path.startswith(prefix):
+        if not source.path.startswith(prefix):
             fail("Schema generator sources must belong to " + ctx.label.package)
-        relative = source.short_path[len(prefix):]
+        relative = source.path[len(prefix):]
         output = ctx.actions.declare_file(ctx.label.name + "/" + relative)
         ctx.actions.symlink(output = output, target_file = source)
         sources.append(output)
@@ -88,12 +95,12 @@ schema_sources = rule(
 def _python_sdk_exports_impl(ctx):
     output = ctx.actions.declare_directory(ctx.label.name)
     manifest = ctx.actions.declare_file(ctx.label.name + ".json")
-    prefix = ctx.label.package + "/"
+    prefix = _package_prefix(ctx)
     files = []
     for source in ctx.files.srcs:
-        if not source.short_path.startswith(prefix):
+        if not source.path.startswith(prefix):
             fail("Python SDK generator inputs must belong to " + ctx.label.package)
-        files.append([source.path, source.short_path[len(prefix):]])
+        files.append([source.path, source.path[len(prefix):]])
     ctx.actions.write(manifest, json.encode(files))
     ctx.actions.run(
         executable = ctx.executable._generator,
