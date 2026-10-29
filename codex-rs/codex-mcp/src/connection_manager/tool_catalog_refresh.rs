@@ -63,6 +63,10 @@ impl McpConnectionSet {
                 .min(REFRESH_TIMEOUT);
             let result = tokio::time::timeout(timeout, async {
                 let client = view.connection.client().await?;
+                // Upstream tracks the same notifications on the transport
+                // (mcp_tool_list_changed). Read its count before fetching, so
+                // a notice that arrives during this listing stays pending.
+                let listed_notifications = client.client.tool_list_revision().current();
                 // Publish through the client's own catalog: it advances the
                 // revision under its write lock, so calls prepared at the old
                 // revision are rejected and no parallel override map exists.
@@ -82,7 +86,11 @@ impl McpConnectionSet {
                             .await
                             .map(|(tools, meta)| (tools, meta, ()))
                         },
-                        |_tools: &[ToolInfo], _meta, ()| (),
+                        |_tools: &[ToolInfo], _meta, ()| {
+                            client
+                                .tool_catalog
+                                .acknowledge_notifications(listed_notifications)
+                        },
                     )
                     .await?;
                 Ok::<(), anyhow::Error>(())
