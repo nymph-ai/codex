@@ -687,7 +687,7 @@ async fn advertised_native_search_function_alias_dispatches() -> anyhow::Result<
             ))
         }],
         Vec::new(),
-        &turn.dynamic_tools,
+        session.dynamic_tools().await.as_ref(),
     );
     assert!(
         router
@@ -771,7 +771,7 @@ async fn native_search_alias_does_not_enable_disabled_search() -> anyhow::Result
         step_context.as_ref(),
         Vec::new(),
         Vec::new(),
-        &turn.dynamic_tools,
+        session.dynamic_tools().await.as_ref(),
     );
     assert!(
         router
