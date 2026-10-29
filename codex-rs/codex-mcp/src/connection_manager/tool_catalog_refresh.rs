@@ -80,9 +80,9 @@ impl McpConnectionSet {
                                 client.server_instructions.as_deref(),
                             )
                             .await
-                            .map(|tools| (tools, ()))
+                            .map(|(tools, meta)| (tools, meta, ()))
                         },
-                        |_tools: &[ToolInfo], ()| (),
+                        |_tools: &[ToolInfo], _meta, ()| (),
                     )
                     .await?;
                 Ok::<(), anyhow::Error>(())
