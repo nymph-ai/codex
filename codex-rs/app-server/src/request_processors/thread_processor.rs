@@ -4649,6 +4649,10 @@ impl ThreadRequestProcessor {
         } else if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
             && let Ok(existing_thread) = self.thread_manager.get_thread(existing_thread_id).await
         {
+            // A loaded thread is resumable before its first turn: another client of
+            // this daemon (a second UI, or the one that started it reconnecting) joins
+            // it, so its rollout is written now rather than at the first user message.
+            existing_thread.ensure_rollout_materialized().await;
             let source_thread = self
                 .read_stored_thread_for_resume(
                     &params.thread_id,

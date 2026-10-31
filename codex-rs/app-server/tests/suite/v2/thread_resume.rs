@@ -453,7 +453,7 @@ async fn wait_for_responses_request_count(
 #[test_case(ThreadHistoryMode::Paginated, false; "paginated with turns")]
 #[test_case(ThreadHistoryMode::Paginated, true; "paginated without turns")]
 #[tokio::test]
-async fn thread_resume_rejects_unmaterialized_thread(
+async fn thread_resume_joins_loaded_thread_before_its_first_turn(
     history_mode: ThreadHistoryMode,
     exclude_turns: bool,
 ) -> Result<()> {
@@ -477,7 +477,8 @@ async fn thread_resume_rejects_unmaterialized_thread(
     let ThreadStartResponse { thread, .. } =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(start_id)).await??;
 
-    // Resume should fail before the first user message materializes rollout storage.
+    // Resuming the loaded thread before any user message joins it and writes its rollout,
+    // so a client that resumes it from the rollout (a second UI) finds it too.
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: thread.id.clone(),
@@ -485,19 +486,17 @@ async fn thread_resume_rejects_unmaterialized_thread(
             ..Default::default()
         })
         .await?;
-    let resume_err: JSONRPCError = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_error_message(RequestId::Integer(resume_id)),
-    )
-    .await??;
-    assert!(
-        resume_err
-            .error
-            .message
-            .contains("no rollout found for thread id"),
-        "unexpected resume error: {}",
-        resume_err.error.message
-    );
+    let ThreadResumeResponse {
+        thread: resumed, ..
+    } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
+    assert_eq!(resumed.id, thread.id);
+    if let Some(rollout) = resumed.path {
+        assert!(
+            rollout.exists(),
+            "rollout not written: {}",
+            rollout.display()
+        );
+    }
 
     Ok(())
 }
