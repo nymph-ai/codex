@@ -22,6 +22,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 
 use crate::analytics_utils::analytics_events_client_from_config;
 use crate::config_manager::ConfigManager;
@@ -74,6 +75,7 @@ use codex_websocket_auth::policy_from_settings;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::info;
@@ -215,6 +217,10 @@ struct ShutdownState {
     requested: bool,
     forced: bool,
     last_logged_running_turn_count: Option<usize>,
+    /// How long a drain may wait for running turns before forcing the restart;
+    /// `None` drains until they finish or a second signal arrives.
+    grace: Option<Duration>,
+    deadline: Option<Instant>,
 }
 
 enum ShutdownAction {
@@ -227,6 +233,16 @@ enum ShutdownSignal {
     Forceable,
     #[cfg(unix)]
     GracefulOnly,
+}
+
+impl ShutdownSignal {
+    fn source(self) -> &'static str {
+        match self {
+            ShutdownSignal::Forceable => "SIGTERM or SIGINT",
+            #[cfg(unix)]
+            ShutdownSignal::GracefulOnly => "SIGHUP",
+        }
+    }
 }
 
 async fn shutdown_signal() -> IoResult<ShutdownSignal> {
@@ -258,8 +274,19 @@ async fn shutdown_signal() -> IoResult<ShutdownSignal> {
 }
 
 impl ShutdownState {
+    fn with_grace(grace: Option<Duration>) -> Self {
+        Self {
+            grace,
+            ..Self::default()
+        }
+    }
+
     fn requested(&self) -> bool {
         self.requested
+    }
+
+    fn deadline(&self) -> Option<Instant> {
+        self.deadline
     }
 
     fn forced(&self) -> bool {
@@ -269,6 +296,7 @@ impl ShutdownState {
     fn on_signal(
         &mut self,
         signal: ShutdownSignal,
+        source: &str,
         connection_count: usize,
         running_turn_count: usize,
         turn_admission: &turn_admission::TurnAdmission,
@@ -282,10 +310,23 @@ impl ShutdownState {
 
         turn_admission.begin_drain();
         self.requested = true;
+        self.deadline = self.grace.map(|grace| Instant::now() + grace);
         self.last_logged_running_turn_count = None;
         info!(
-            "received shutdown signal; entering graceful restart drain (connections={}, runningAssistantTurns={}, new client turns rejected)",
-            connection_count, running_turn_count,
+            "received shutdown signal from {source}; entering graceful restart drain (connections={}, runningAssistantTurns={}, graceSeconds={:?}, new client turns rejected)",
+            connection_count,
+            running_turn_count,
+            self.grace.map(|grace| grace.as_secs()),
+        );
+    }
+
+    fn on_deadline(&mut self, running_turn_count: usize) {
+        if !self.requested || self.forced {
+            return;
+        }
+        self.forced = true;
+        info!(
+            "graceful restart drain exceeded its grace; forcing restart with {running_turn_count} running assistant turn(s)"
         );
     }
 
@@ -302,7 +343,7 @@ impl ShutdownState {
         if self.forced || (running_turn_count == 0 && active_admissions == 0) {
             if self.forced {
                 info!(
-                    "received second shutdown signal; forcing restart with {running_turn_count} running assistant turn(s) and {connection_count} connection(s)"
+                    "shutdown forced; restarting with {running_turn_count} running assistant turn(s) and {connection_count} connection(s)"
                 );
             } else {
                 info!(
@@ -1012,6 +1053,13 @@ pub async fn run_main_with_transport_options(
             .as_path()
             .join("app-server-daemon/settings.json")
     });
+    // A managed daemon bounds its drain by the grace its lifecycle commands
+    // give it, so a shutdown request nobody follows up cannot leave it
+    // refusing new sessions behind a long turn.
+    let drain_grace = match &daemon_settings_file {
+        Some(path) => Some(codex_app_server_daemon::shutdown_grace(path).await),
+        None => None,
+    };
     let processor_handle = tokio::spawn({
         let auth_manager = Arc::clone(&auth_manager);
         let initialize_notification_sender = outgoing_message_sender.clone();
@@ -1091,7 +1139,7 @@ pub async fn run_main_with_transport_options(
             });
             let mut snapshot_finished = !managed_daemon;
             let mut clients_disconnected = false;
-            let mut shutdown_state = ShutdownState::default();
+            let mut shutdown_state = ShutdownState::with_grace(drain_grace);
             let mut shutdown_signal_future = Box::pin(shutdown_signal());
             let exit_reason = loop {
                 // Sample submissions first: one can publish a running turn before
@@ -1138,7 +1186,10 @@ pub async fn run_main_with_transport_options(
                             }
                         };
                         let running_turn_count = *running_turn_count_rx.borrow();
-                        shutdown_state.on_signal(signal, connections.len(), running_turn_count, &processor.turn_admission);
+                        shutdown_state.on_signal(signal, signal.source(), connections.len(), running_turn_count, &processor.turn_admission);
+                    }
+                    _ = tokio::time::sleep_until(shutdown_state.deadline().unwrap_or_else(Instant::now)), if shutdown_state.deadline().is_some() && !shutdown_state.forced() => {
+                        shutdown_state.on_deadline(*running_turn_count_rx.borrow());
                     }
                     changed = running_turn_count_rx.changed(), if shutdown_state.requested() => {
                         if changed.is_err() {
@@ -1162,7 +1213,7 @@ pub async fn run_main_with_transport_options(
                         }
                         match event {
                             TransportEvent::DaemonShutdown => {
-                                shutdown_state.on_signal(ShutdownSignal::Forceable, connections.len(), *running_turn_count_rx.borrow(), &processor.turn_admission);
+                                shutdown_state.on_signal(ShutdownSignal::Forceable, "the daemon control socket", connections.len(), *running_turn_count_rx.borrow(), &processor.turn_admission);
                             }
                             TransportEvent::ConnectionOpened {
                                 connection_id,
