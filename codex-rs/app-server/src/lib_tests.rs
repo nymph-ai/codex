@@ -25,6 +25,7 @@ fn shutdown_waits_for_admitted_requests_but_force_remains_available() {
     let running_turn_count = 0;
     shutdown.on_signal(
         ShutdownSignal::Forceable,
+        "test",
         connection_count,
         running_turn_count,
         &admission,
@@ -35,6 +36,7 @@ fn shutdown_waits_for_admitted_requests_but_force_remains_available() {
     ));
     shutdown.on_signal(
         ShutdownSignal::Forceable,
+        "test",
         connection_count,
         running_turn_count,
         &admission,
@@ -45,6 +47,42 @@ fn shutdown_waits_for_admitted_requests_but_force_remains_available() {
         ShutdownAction::Finish
     ));
     drop(in_flight);
+}
+
+#[test]
+fn shutdown_forces_restart_once_the_drain_grace_passes() {
+    let admission = TurnAdmission::default();
+    let mut shutdown = ShutdownState::with_grace(Some(std::time::Duration::from_secs(60)));
+    let connection_count = 1;
+    let running_turn_count = 1;
+    shutdown.on_deadline(running_turn_count);
+    assert!(!shutdown.forced(), "no drain, nothing to force");
+    shutdown.on_signal(
+        ShutdownSignal::Forceable,
+        "test",
+        connection_count,
+        running_turn_count,
+        &admission,
+    );
+    assert!(shutdown.deadline().is_some());
+    assert!(matches!(
+        shutdown.update(running_turn_count, 0, connection_count),
+        ShutdownAction::Noop
+    ));
+    shutdown.on_deadline(running_turn_count);
+    assert!(shutdown.forced());
+    assert!(matches!(
+        shutdown.update(running_turn_count, 0, connection_count),
+        ShutdownAction::Finish
+    ));
+}
+
+#[test]
+fn shutdown_without_grace_has_no_deadline() {
+    let admission = TurnAdmission::default();
+    let mut shutdown = ShutdownState::default();
+    shutdown.on_signal(ShutdownSignal::Forceable, "test", 1, 1, &admission);
+    assert_eq!(shutdown.deadline(), None);
 }
 
 #[test]
