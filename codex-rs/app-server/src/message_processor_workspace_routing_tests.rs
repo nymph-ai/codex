@@ -90,8 +90,10 @@ async fn background_routing_call_sites_skip_config(api_key: Option<&str>) -> any
         // Isolate routing from unrelated plugin startup configuration loads.
         plugin_startup_tasks: None,
     }));
-    // The model catalog has its own legitimate config refresh, outside routing.
+    // The model catalog and the MCP OAuth token refresh each have their own
+    // legitimate config load, outside routing.
     processor.models_refresh_worker.shutdown();
+    processor.mcp_oauth_refresh_worker.shutdown();
 
     // Observe the task scheduled by real processor construction, not the helper.
     assert!(
