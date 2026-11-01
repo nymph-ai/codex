@@ -11,7 +11,8 @@ verified on 2026-10-29. The Rust workspace declares version `0.166.0`.
 
 Fork changes include Fabric thread identity and catalog refresh, daemon-mediated
 MCP OAuth token leasing, shared authentication refresh serialization, display
-limits and bounded model-capacity retries. Fabric hosts Codex over ACP and pushes
+limits, bounded model-capacity retries and a managed daemon drain bounded by
+`shutdownGraceSeconds`. Fabric hosts Codex over ACP and pushes
 its inbox in as prompts, so the fork carries no Fabric delivery code; it carries
 only changes that make Codex itself better.
 

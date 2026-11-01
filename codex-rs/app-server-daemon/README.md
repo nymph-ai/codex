@@ -74,6 +74,10 @@ updater-triggered restarts, `shutdownGraceSeconds` defaults to 60 and accepts
 an integer from 0 through 300. Zero forces shutdown immediately after requesting
 a graceful exit; the five-minute maximum bounds the wait even if a turn is still
 running.
+The managed app-server applies the same grace to its own drain, so a shutdown
+whose requester never follows up (a bare `SIGTERM`, or a stop command that was
+itself killed) still forces the restart once the grace passes instead of
+refusing new sessions until the last running turn ends.
 
 ## Bootstrap flow
 
