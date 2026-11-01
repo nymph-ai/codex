@@ -119,6 +119,14 @@ pub async fn probe_app_server_version(socket_path: &Path) -> Result<String> {
     Ok(client::probe(socket_path).await?.app_server_version)
 }
 
+/// How long a managed app-server may drain its running turns after a shutdown
+/// request before it forces the restart: the same `shutdownGraceSeconds` the
+/// lifecycle commands wait before killing it.
+pub async fn shutdown_grace(settings_file: &Path) -> Duration {
+    let settings = settings::DaemonSettings::load_for_stop(settings_file).await;
+    Duration::from_secs(u64::from(settings.shutdown_grace_seconds))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum BootstrapStatus {
