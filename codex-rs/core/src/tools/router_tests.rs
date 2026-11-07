@@ -788,7 +788,7 @@ async fn advertised_native_search_function_alias_dispatches() -> anyhow::Result<
         json!({"type": "tool_search_call", "call_id": "native", "execution": "client", "arguments": {"query": "lookup"}}),
         json!({"type": "function_call", "call_id": "alias", "namespace": "tool_search", "name": "tool_search_tool", "arguments": "{\"query\":\"lookup\"}"}),
     ].into_iter().enumerate() {
-        let call = ToolRouter::build_tool_call(serde_json::from_value(item)?)?.expect("call");
+        let call = router.build_tool_call(serde_json::from_value(item)?)?.expect("call");
         let result = router.dispatch_tool_call_with_code_mode_result(
             Arc::clone(&session), Arc::clone(&step_context), CancellationToken::new(),
             Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())), call, ToolCallSource::Direct,
@@ -816,7 +816,7 @@ async fn advertised_native_search_function_alias_dispatches() -> anyhow::Result<
         ("other_search", "tool_search_tool"),
         ("tool_search", "other_tool"),
     ] {
-        let call = ToolRouter::build_tool_call(serde_json::from_value(json!({
+        let call = router.build_tool_call(serde_json::from_value(json!({
             "type": "function_call", "call_id": "wrong-namespace", "namespace": namespace,
             "name": name, "arguments": "{\"query\":\"lookup\"}",
         }))?)?
@@ -858,7 +858,7 @@ async fn native_search_alias_does_not_enable_disabled_search() -> anyhow::Result
             .registered_tool(&ToolName::plain("tool_search"))
             .is_none()
     );
-    let call = ToolRouter::build_tool_call(serde_json::from_value(json!({
+    let call = router.build_tool_call(serde_json::from_value(json!({
         "type": "function_call", "call_id": "disabled-search", "namespace": "tool_search",
         "name": "tool_search_tool", "arguments": "{\"query\":\"lookup\"}",
     }))?)?
