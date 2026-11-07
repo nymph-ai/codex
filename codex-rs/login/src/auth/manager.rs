@@ -3553,7 +3553,8 @@ impl AuthManager {
             // Another process may have rotated the refresh token since this snapshot was cached.
             // Redeeming the stale one would fail as reused, so adopt the stored tokens instead.
             let expected_account_id = attempted_auth.as_ref().and_then(CodexAuth::get_account_id);
-            if let ReloadOutcome::ReloadedChanged = self
+            // A failed reload falls through to the refresh, which reports its own error.
+            if let Ok(ReloadOutcome::ReloadedChanged) = self
                 .reload_if_account_id_matches(expected_account_id.as_deref())
                 .await
             {
@@ -3806,7 +3807,7 @@ impl AuthManager {
         let adopted = matches!(
             self.reload_if_account_id_matches(attempted_account_id.as_deref())
                 .await,
-            ReloadOutcome::ReloadedChanged
+            Ok(ReloadOutcome::ReloadedChanged)
         );
         if adopted {
             tracing::info!("Adopted stored auth after another writer rotated the refresh token.");
