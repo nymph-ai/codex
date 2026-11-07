@@ -301,8 +301,11 @@ impl AuthStorageBackend for FileAuthStorage {
     }
 }
 
+/// The refresh lock is held across the token exchange, so it must not be upstream's
+/// `auth.json.lock`: that commit lock is taken again by the save inside the refresh, and a second
+/// open file description would wait on this one until the commit lock times out.
 pub(super) fn get_auth_lock_file(codex_home: &Path) -> PathBuf {
-    codex_home.join("auth.json.lock")
+    codex_home.join("auth.refresh.lock")
 }
 
 /// Takes the advisory lock that serializes ChatGPT token refresh across every process sharing
