@@ -5630,6 +5630,27 @@ class ThreadId(RootModel[str]):
     root: str
 
 
+class ThreadImportSnapshotChunk(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    is_final: Annotated[
+        bool,
+        Field(
+            alias="isFinal",
+            description="Whether this is the last chunk; adoption runs on the final chunk.",
+        ),
+    ]
+    lines: Annotated[list[str], Field(description="Verbatim rollout JSONL lines for this chunk.")]
+    snapshot_id: Annotated[
+        str,
+        Field(
+            alias="snapshotId",
+            description="Caller-chosen staging identifier, unique per transfer (`[A-Za-z0-9_-]{1,64}`).",
+        ),
+    ]
+
+
 class ThreadInjectItemsParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,

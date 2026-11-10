@@ -24,9 +24,9 @@ use crate::thread_sample::SampleTask;
 use crate::thread_sample::SampleThread;
 use crate::thread_sample::generate_sample;
 use codex_app_server_protocol::SelectedCapabilityRoot;
+use codex_app_server_protocol::ThreadHistoryMode as ApiThreadHistoryMode;
 use codex_app_server_protocol::ThreadImportParams;
 use codex_app_server_protocol::ThreadImportResponse;
-use codex_app_server_protocol::ThreadHistoryMode as ApiThreadHistoryMode;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadItemsListAnchor;
@@ -41,6 +41,8 @@ use codex_app_server_protocol::ThreadSectionAppearance;
 use codex_app_server_protocol::ThreadSectionChangedNotification;
 use codex_app_server_protocol::ThreadSectionMoveParams;
 use codex_app_server_protocol::ThreadSectionMoveResponse;
+use codex_app_server_protocol::ThreadSnapshotParams;
+use codex_app_server_protocol::ThreadSnapshotResponse;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ThreadIdleCause;
@@ -727,11 +729,38 @@ impl ThreadRequestProcessor {
         params: ThreadImportParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
-        let destination = self
-            .thread_store
-            .import_rollout(params.path)
-            .await
-            .map_err(|err| thread_store_mutation_error("import", err))?;
+        let destination = match (params.path, params.snapshot) {
+            (Some(path), None) => Some(
+                self.thread_store
+                    .import_rollout(path)
+                    .await
+                    .map_err(|err| thread_store_mutation_error("import", err))?,
+            ),
+            (None, Some(chunk)) => self
+                .thread_store
+                .import_snapshot_chunk(codex_thread_store::ImportSnapshotChunkParams {
+                    snapshot_id: chunk.snapshot_id,
+                    lines: chunk.lines,
+                    is_final: chunk.is_final,
+                })
+                .await
+                .map_err(|err| thread_store_mutation_error("import", err))?,
+            _ => {
+                return Err(invalid_request(
+                    "exactly one of `path` or `snapshot` must be set",
+                ));
+            }
+        };
+        let Some(destination) = destination else {
+            // Still staging snapshot chunks; nothing adopted yet.
+            return Ok(Some(
+                ThreadImportResponse {
+                    thread: None,
+                    path: None,
+                }
+                .into(),
+            ));
+        };
         let stored_thread = self
             .thread_store
             .read_thread_by_rollout_path(StoreReadThreadByRolloutPathParams {
@@ -748,8 +777,42 @@ impl ThreadRequestProcessor {
         );
         Ok(Some(
             ThreadImportResponse {
-                thread,
-                path: destination,
+                thread: Some(thread),
+                path: Some(destination),
+            }
+            .into(),
+        ))
+    }
+
+    /// Exports verbatim rollout lines for cross-daemon restore. The cursor
+    /// is an opaque decimal line offset minted by a previous response.
+    pub(crate) async fn thread_snapshot(
+        &self,
+        params: ThreadSnapshotParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let thread_id = ThreadId::from_string(&params.thread_id)
+            .map_err(|_| invalid_request(format!("invalid thread id `{}`", params.thread_id)))?;
+        let offset = match params.cursor.as_deref() {
+            None | Some("") => 0,
+            Some(cursor) => cursor
+                .parse::<u64>()
+                .map_err(|_| invalid_request("invalid snapshot cursor"))?,
+        };
+        let limit = params.limit.unwrap_or(1_000).clamp(1, 10_000) as usize;
+        let chunk = self
+            .thread_store
+            .snapshot_rollout(codex_thread_store::SnapshotRolloutParams {
+                thread_id,
+                offset,
+                limit,
+            })
+            .await
+            .map_err(thread_store_resume_read_error)?;
+        Ok(Some(
+            ThreadSnapshotResponse {
+                thread_id: params.thread_id,
+                lines: chunk.lines,
+                next_cursor: chunk.next_offset.map(|next| next.to_string()),
             }
             .into(),
         ))

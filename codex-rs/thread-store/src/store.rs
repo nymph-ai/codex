@@ -21,6 +21,7 @@ use crate::DeleteThreadParams;
 use crate::DeleteThreadSectionParams;
 use crate::DeleteThreadsParams;
 use crate::DeletedProject;
+use crate::ImportSnapshotChunkParams;
 use crate::ItemPage;
 use crate::ListItemsParams;
 use crate::ListProjectsParams;
@@ -44,6 +45,8 @@ use crate::ResumeThreadParams;
 use crate::RevertThreadParams;
 use crate::SearchThreadOccurrencesParams;
 use crate::SearchThreadsParams;
+use crate::SnapshotRolloutChunk;
+use crate::SnapshotRolloutParams;
 use crate::StoredModelContext;
 use crate::StoredProject;
 use crate::StoredProjectsPage;
@@ -216,6 +219,33 @@ pub trait ThreadStore: Any + Send + Sync {
         Box::pin(async {
             Err(ThreadStoreError::Unsupported {
                 operation: "import_rollout",
+            })
+        })
+    }
+
+    /// Exports one chunk of verbatim rollout lines for cross-daemon restore.
+    /// Pair with `import_snapshot_chunk` on the receiving store. The default
+    /// is unsupported.
+    fn snapshot_rollout(
+        &self,
+        _params: SnapshotRolloutParams,
+    ) -> ThreadStoreFuture<'_, SnapshotRolloutChunk> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "snapshot_rollout",
+            })
+        })
+    }
+
+    /// Receives one snapshot chunk. Returns the adopted rollout path on the
+    /// final chunk and `None` while staging. The default is unsupported.
+    fn import_snapshot_chunk(
+        &self,
+        _params: ImportSnapshotChunkParams,
+    ) -> ThreadStoreFuture<'_, Option<PathBuf>> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "import_snapshot_chunk",
             })
         })
     }
