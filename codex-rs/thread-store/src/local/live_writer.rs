@@ -182,6 +182,7 @@ pub(super) async fn resume_thread(
 async fn adopt_foreign_rollout(
     store: &LocalThreadStore,
     thread_id: ThreadId,
+    created_at_timestamp: &str,
     rollout_path: PathBuf,
 ) -> ThreadStoreResult<PathBuf> {
     let codex_home = store.config.codex_home.as_path();
@@ -216,16 +217,38 @@ async fn adopt_foreign_rollout(
             }
         }
         _ => {
-            let file_name =
-                rollout_path
-                    .file_name()
-                    .ok_or_else(|| ThreadStoreError::InvalidRequest {
-                        message: format!(
-                            "rollout path `{}` has no file name",
-                            rollout_path.display()
-                        ),
-                    })?;
-            sessions_root.join(file_name)
+            // Bare rollout files (snapshot transport) get the canonical
+            // sessions/YYYY/MM/DD/rollout-<timestamp>-<id>.jsonl layout so
+            // filesystem discovery and backfill recognize them.
+            let source_name = rollout_path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let compressed = source_name.ends_with(".zst");
+            let file_name = if source_name.starts_with("rollout-") {
+                source_name
+            } else {
+                let stamp = created_at_timestamp
+                    .chars()
+                    .take(19)
+                    .map(|ch| if ch == ':' { '-' } else { ch })
+                    .collect::<String>();
+                format!(
+                    "rollout-{stamp}-{thread_id}.jsonl{}",
+                    if compressed { ".zst" } else { "" }
+                )
+            };
+            let mut destination = sessions_root.clone();
+            for part in created_at_timestamp
+                .get(..10)
+                .unwrap_or_default()
+                .split('-')
+            {
+                if !part.is_empty() {
+                    destination.push(part);
+                }
+            }
+            destination.join(file_name)
         }
     };
     if let Ok(existing) = tokio::fs::metadata(&destination).await {
@@ -272,6 +295,18 @@ async fn adopt_foreign_rollout(
     }
     super::thread_history_materialization::materialize_to_sqlite(store, thread_id, &destination)
         .await?;
+    // Seed/reconcile the state-DB threads row so the thread is discoverable
+    // by id (thread/list, thread/read, thread/resume) without waiting for
+    // startup backfill. This reuses the read-repair path: it seeds a missing
+    // row from rollout contents and never changes an existing row's path.
+    let archived = destination.starts_with(&archived_root);
+    codex_rollout::state_db::read_repair_rollout_path(
+        store.state_db.as_deref(),
+        Some(thread_id),
+        Some(archived),
+        &destination,
+    )
+    .await;
     Ok(destination)
 }
 
@@ -291,7 +326,13 @@ pub(super) async fn import_rollout(
                 rollout_path.display()
             ),
         })?;
-    adopt_foreign_rollout(store, session_meta.meta.id, rollout_path).await
+    adopt_foreign_rollout(
+        store,
+        session_meta.meta.id,
+        session_meta.meta.timestamp.as_str(),
+        rollout_path,
+    )
+    .await
 }
 
 #[tracing::instrument(
