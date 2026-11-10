@@ -18,6 +18,7 @@ mod rollout_migration;
 #[allow(dead_code)]
 mod rollout_lineage;
 mod search_threads;
+mod snapshot;
 mod thread_attachments;
 mod thread_history;
 mod thread_history_materialization;
@@ -573,6 +574,27 @@ impl ThreadStore for LocalThreadStore {
         params: ResumeThreadParams,
     ) -> ThreadStoreFuture<'_, Arc<Vec<RolloutItem>>> {
         Box::pin(async move { live_writer::resume_thread(self, params).await })
+    }
+
+    fn import_rollout(
+        &self,
+        rollout_path: std::path::PathBuf,
+    ) -> ThreadStoreFuture<'_, std::path::PathBuf> {
+        Box::pin(async move { live_writer::import_rollout(self, rollout_path).await })
+    }
+
+    fn snapshot_rollout(
+        &self,
+        params: crate::SnapshotRolloutParams,
+    ) -> ThreadStoreFuture<'_, crate::SnapshotRolloutChunk> {
+        Box::pin(async move { snapshot::snapshot_rollout(self, params).await })
+    }
+
+    fn import_snapshot_chunk(
+        &self,
+        params: crate::ImportSnapshotChunkParams,
+    ) -> ThreadStoreFuture<'_, Option<std::path::PathBuf>> {
+        Box::pin(async move { snapshot::import_snapshot_chunk(self, params).await })
     }
 
     fn append_items(&self, params: AppendThreadItemsParams) -> ThreadStoreFuture<'_, ()> {
@@ -1824,6 +1846,232 @@ mod tests {
 
         assert_rollout_contains_message(rollout_path.as_path(), "before resume").await;
         assert_rollout_contains_message(rollout_path.as_path(), "after resume").await;
+    }
+
+    #[tokio::test]
+    async fn import_rollout_adopts_foreign_rollout_across_homes() {
+        // Cross-daemon restore: the source store writes a thread in home A;
+        // a store rooted at home B imports the foreign rollout, then resumes
+        // by id with no path hint. The rollout must be adopted under B
+        // (source untouched) and discoverable by id in B. Resume-by-path
+        // itself keeps its write-in-place semantics; import is explicit.
+        let home_a = TempDir::new().expect("temp dir a");
+        let home_b = TempDir::new().expect("temp dir b");
+        let config_a = test_config(home_a.path());
+        let config_b = test_config(home_b.path());
+        let runtime_a = codex_state::StateRuntime::init(
+            config_a.sqlite.clone(),
+            config_a.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db a should initialize");
+        let runtime_b = codex_state::StateRuntime::init(
+            config_b.sqlite.clone(),
+            config_b.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db b should initialize");
+        let thread_id = ThreadId::default();
+
+        let store_a = LocalThreadStore::new(config_a.clone(), Some(runtime_a));
+        store_a
+            .create_thread(create_thread_params(thread_id))
+            .await
+            .expect("create thread in home a");
+        store_a
+            .append_items(AppendThreadItemsParams {
+                thread_id,
+                items: vec![user_message_item("before adoption")],
+            })
+            .await
+            .expect("append in home a");
+        store_a
+            .persist_thread(thread_id, PersistContext::Standard)
+            .await
+            .expect("persist in home a");
+        store_a.flush_thread(thread_id).await.expect("flush home a");
+        let source_path = store_a
+            .live_rollout_path(thread_id)
+            .await
+            .expect("source rollout path");
+        store_a
+            .shutdown_thread(thread_id)
+            .await
+            .expect("shutdown home a writer");
+        let source_before = tokio::fs::read(&source_path).await.expect("read source");
+
+        let store_b = LocalThreadStore::new(config_b.clone(), Some(runtime_b));
+        let imported_path = store_b
+            .import_rollout(source_path.clone())
+            .await
+            .expect("import foreign rollout into home b");
+        assert!(
+            imported_path.starts_with(home_b.path()),
+            "imported rollout must live under home b: {}",
+            imported_path.display()
+        );
+        store_b
+            .resume_thread(ResumeThreadParams {
+                history_revision: None,
+                thread_id,
+                rollout_path: None,
+                history: None,
+                include_archived: true,
+                metadata: thread_metadata(),
+            })
+            .await
+            .expect("resume imported thread by id in home b");
+        let adopted_path = store_b
+            .live_rollout_path(thread_id)
+            .await
+            .expect("adopted rollout path");
+        assert!(
+            adopted_path.starts_with(home_b.path()),
+            "adopted rollout must live under home b: {}",
+            adopted_path.display()
+        );
+        assert_ne!(adopted_path, source_path);
+        store_b
+            .append_items(AppendThreadItemsParams {
+                thread_id,
+                items: vec![user_message_item("after adoption")],
+            })
+            .await
+            .expect("append in home b");
+        store_b.flush_thread(thread_id).await.expect("flush home b");
+        store_b
+            .shutdown_thread(thread_id)
+            .await
+            .expect("shutdown home b writer");
+
+        assert_rollout_contains_message(adopted_path.as_path(), "before adoption").await;
+        assert_rollout_contains_message(adopted_path.as_path(), "after adoption").await;
+        let source_after = tokio::fs::read(&source_path).await.expect("re-read source");
+        assert_eq!(
+            source_before, source_after,
+            "adoption must never mutate the source rollout"
+        );
+
+        // Discoverable by id in home B with no path hint.
+        let store_b2 = LocalThreadStore::new(
+            config_b.clone(),
+            Some(
+                codex_state::StateRuntime::init(
+                    config_b.sqlite.clone(),
+                    config_b.default_model_provider_id.clone(),
+                )
+                .await
+                .expect("state db b2 should initialize"),
+            ),
+        );
+        let read = store_b2
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: true,
+                include_history: false,
+            })
+            .await
+            .expect("read adopted thread by id in home b");
+        assert_eq!(read.thread_id, thread_id);
+    }
+
+    #[tokio::test]
+    async fn snapshot_round_trip_restores_thread_across_homes() {
+        // Cross-machine restore: snapshot lines out of home A, stage them
+        // into home B in chunks, final chunk adopts, resume by id works.
+        let home_a = TempDir::new().expect("temp dir a");
+        let home_b = TempDir::new().expect("temp dir b");
+        let config_a = test_config(home_a.path());
+        let config_b = test_config(home_b.path());
+        let runtime_a = codex_state::StateRuntime::init(
+            config_a.sqlite.clone(),
+            config_a.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db a should initialize");
+        let runtime_b = codex_state::StateRuntime::init(
+            config_b.sqlite.clone(),
+            config_b.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db b should initialize");
+        let thread_id = ThreadId::default();
+
+        let store_a = LocalThreadStore::new(config_a, Some(runtime_a));
+        store_a
+            .create_thread(create_thread_params(thread_id))
+            .await
+            .expect("create thread in home a");
+        for text in ["snapshot me", "second line please", "third line please"] {
+            store_a
+                .append_items(AppendThreadItemsParams {
+                    thread_id,
+                    items: vec![user_message_item(text)],
+                })
+                .await
+                .expect("append in home a");
+        }
+        store_a
+            .persist_thread(thread_id, PersistContext::Standard)
+            .await
+            .expect("persist in home a");
+        store_a.flush_thread(thread_id).await.expect("flush home a");
+        store_a
+            .shutdown_thread(thread_id)
+            .await
+            .expect("shutdown home a writer");
+
+        let mut all_lines = Vec::new();
+        let mut offset = 0u64;
+        loop {
+            let chunk = store_a
+                .snapshot_rollout(crate::SnapshotRolloutParams {
+                    thread_id,
+                    offset,
+                    limit: 2,
+                })
+                .await
+                .expect("snapshot chunk");
+            offset += chunk.lines.len() as u64;
+            all_lines.extend(chunk.lines);
+            match chunk.next_offset {
+                Some(next) => offset = next,
+                None => break,
+            }
+        }
+        assert!(all_lines.len() > 2, "snapshot must span multiple chunks at limit 2");
+
+        let store_b = LocalThreadStore::new(config_b, Some(runtime_b));
+        let total = all_lines.len();
+        let mut adopted = None;
+        for (index, window) in all_lines.chunks(3).enumerate() {
+            let is_final = (index + 1) * 3 >= total;
+            let result = store_b
+                .import_snapshot_chunk(crate::ImportSnapshotChunkParams {
+                    snapshot_id: "spike-1".to_string(),
+                    lines: window.to_vec(),
+                    is_final,
+                })
+                .await
+                .expect("import chunk");
+            if is_final {
+                adopted = result;
+            } else {
+                assert!(result.is_none(), "non-final chunks only stage");
+            }
+        }
+        let adopted_path = adopted.expect("final chunk adopts");
+        assert!(adopted_path.starts_with(home_b.path()));
+        assert_rollout_contains_message(adopted_path.as_path(), "snapshot me").await;
+        let read = store_b
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: true,
+                include_history: false,
+            })
+            .await
+            .expect("read restored thread by id in home b");
+        assert_eq!(read.thread_id, thread_id);
     }
 
     #[tokio::test]

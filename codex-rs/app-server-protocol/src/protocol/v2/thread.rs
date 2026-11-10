@@ -725,6 +725,81 @@ pub struct ThreadArchiveResponse {}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ThreadImportParams {
+    /// Rollout file written by another daemon (or a bare CLI session) to
+    /// adopt into this daemon's thread store. The source file is never
+    /// mutated; future appends land in the store-owned copy. After import,
+    /// resume the thread by id with `thread/resume`. Exactly one of `path`
+    /// or `snapshot` must be set.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub path: Option<PathBuf>,
+    /// One chunk of a snapshot produced by `thread/snapshot` on the source
+    /// daemon, for daemons that cannot read the source rollout path (for
+    /// example across machines or pod filesystems).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub snapshot: Option<ThreadImportSnapshotChunk>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadImportSnapshotChunk {
+    /// Caller-chosen staging identifier, unique per transfer
+    /// (`[A-Za-z0-9_-]{1,64}`).
+    pub snapshot_id: String,
+    /// Verbatim rollout JSONL lines for this chunk.
+    pub lines: Vec<String>,
+    /// Whether this is the last chunk; adoption runs on the final chunk.
+    pub is_final: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadImportResponse {
+    /// Adopted thread; `null` while snapshot chunks are still staging.
+    #[ts(optional = nullable)]
+    pub thread: Option<Thread>,
+    /// Store-owned rollout path the thread was adopted into; `null` while
+    /// snapshot chunks are still staging.
+    #[ts(optional = nullable)]
+    pub path: Option<PathBuf>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSnapshotParams {
+    pub thread_id: String,
+    /// Opaque offset cursor from a previous response; omit for the first chunk.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub cursor: Option<String>,
+    /// Maximum number of rollout lines to return (default and max are
+    /// server-chosen when omitted or out of range).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub limit: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSnapshotResponse {
+    pub thread_id: String,
+    /// Verbatim rollout JSONL lines in replay order. Feed them to
+    /// `thread/import` snapshot chunks on the receiving daemon.
+    pub lines: Vec<String>,
+    /// Cursor for the next chunk; `null` at end of rollout.
+    #[ts(optional = nullable)]
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ThreadDeleteParams {
     pub thread_id: String,
 }

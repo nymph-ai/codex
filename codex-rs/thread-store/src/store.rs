@@ -4,6 +4,7 @@ use codex_rollout::RolloutItem;
 use std::any::Any;
 use std::fmt;
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -20,6 +21,7 @@ use crate::DeleteThreadParams;
 use crate::DeleteThreadSectionParams;
 use crate::DeleteThreadsParams;
 use crate::DeletedProject;
+use crate::ImportSnapshotChunkParams;
 use crate::ItemPage;
 use crate::ListItemsParams;
 use crate::ListProjectsParams;
@@ -43,6 +45,8 @@ use crate::ResumeThreadParams;
 use crate::RevertThreadParams;
 use crate::SearchThreadOccurrencesParams;
 use crate::SearchThreadsParams;
+use crate::SnapshotRolloutChunk;
+use crate::SnapshotRolloutParams;
 use crate::StoredModelContext;
 use crate::StoredProject;
 use crate::StoredProjectsPage;
@@ -199,6 +203,49 @@ pub trait ThreadStore: Any + Send + Sync {
         Box::pin(async {
             Err(ThreadStoreError::Unsupported {
                 operation: "resume_thread_with_preparation",
+            })
+        })
+    }
+
+    /// Adopts a rollout file written outside this store (cross-daemon resume).
+    ///
+    /// Implementations copy/register the foreign rollout so the thread becomes
+    /// discoverable by id in this store and future appends land in a
+    /// store-owned file; the source file is never mutated. Returns the
+    /// store-owned rollout path. Rollouts already owned by this store return
+    /// their existing path unchanged. The default is unsupported so stores
+    /// without a file layout keep their current resume behavior.
+    fn import_rollout(&self, _rollout_path: PathBuf) -> ThreadStoreFuture<'_, PathBuf> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "import_rollout",
+            })
+        })
+    }
+
+    /// Exports one chunk of verbatim rollout lines for cross-daemon restore.
+    /// Pair with `import_snapshot_chunk` on the receiving store. The default
+    /// is unsupported.
+    fn snapshot_rollout(
+        &self,
+        _params: SnapshotRolloutParams,
+    ) -> ThreadStoreFuture<'_, SnapshotRolloutChunk> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "snapshot_rollout",
+            })
+        })
+    }
+
+    /// Receives one snapshot chunk. Returns the adopted rollout path on the
+    /// final chunk and `None` while staging. The default is unsupported.
+    fn import_snapshot_chunk(
+        &self,
+        _params: ImportSnapshotChunkParams,
+    ) -> ThreadStoreFuture<'_, Option<PathBuf>> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "import_snapshot_chunk",
             })
         })
     }

@@ -306,6 +306,40 @@ pub struct ReadThreadByRolloutPathParams {
     pub include_history: bool,
 }
 
+/// Parameters for exporting one chunk of a thread snapshot (cross-daemon
+/// restore). Lines are verbatim rollout JSONL records in replay order.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotRolloutParams {
+    /// Thread to snapshot.
+    pub thread_id: ThreadId,
+    /// Line offset to start from (0 for the first chunk).
+    pub offset: u64,
+    /// Maximum number of lines to return.
+    pub limit: usize,
+}
+
+/// One chunk of verbatim rollout lines from `snapshot_rollout`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotRolloutChunk {
+    /// Verbatim rollout JSONL lines (without trailing newlines).
+    pub lines: Vec<String>,
+    /// Offset of the next unread line, or `None` at end of rollout.
+    pub next_offset: Option<u64>,
+}
+
+/// Parameters for importing one snapshot chunk. Chunks sharing a snapshot id
+/// append to the same staging rollout; the final chunk adopts it into the
+/// store. Snapshot ids are caller-chosen and must match `[A-Za-z0-9_-]{1,64}`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportSnapshotChunkParams {
+    /// Caller-chosen staging identifier, unique per transfer.
+    pub snapshot_id: String,
+    /// Verbatim rollout JSONL lines for this chunk.
+    pub lines: Vec<String>,
+    /// Whether this is the last chunk; adoption runs on the final chunk.
+    pub is_final: bool,
+}
+
 /// The sort key to use when listing stored threads.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ThreadSortKey {
