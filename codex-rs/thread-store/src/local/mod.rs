@@ -1834,11 +1834,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resume_thread_adopts_foreign_rollout_across_homes() {
-        // Cross-daemon resume: the source store writes a thread in home A;
-        // a store rooted at home B resumes it by foreign rollout path. The
-        // rollout must be adopted under B (source untouched) and become
-        // discoverable by id in B.
+    async fn import_rollout_adopts_foreign_rollout_across_homes() {
+        // Cross-daemon restore: the source store writes a thread in home A;
+        // a store rooted at home B imports the foreign rollout, then resumes
+        // by id with no path hint. The rollout must be adopted under B
+        // (source untouched) and discoverable by id in B. Resume-by-path
+        // itself keeps its write-in-place semantics; import is explicit.
         let home_a = TempDir::new().expect("temp dir a");
         let home_b = TempDir::new().expect("temp dir b");
         let config_a = test_config(home_a.path());
@@ -1885,17 +1886,26 @@ mod tests {
         let source_before = tokio::fs::read(&source_path).await.expect("read source");
 
         let store_b = LocalThreadStore::new(config_b.clone(), Some(runtime_b));
+        let imported_path = store_b
+            .import_rollout(source_path.clone())
+            .await
+            .expect("import foreign rollout into home b");
+        assert!(
+            imported_path.starts_with(home_b.path()),
+            "imported rollout must live under home b: {}",
+            imported_path.display()
+        );
         store_b
             .resume_thread(ResumeThreadParams {
                 history_revision: None,
                 thread_id,
-                rollout_path: Some(source_path.clone()),
+                rollout_path: None,
                 history: None,
                 include_archived: true,
                 metadata: thread_metadata(),
             })
             .await
-            .expect("resume foreign rollout in home b");
+            .expect("resume imported thread by id in home b");
         let adopted_path = store_b
             .live_rollout_path(thread_id)
             .await
@@ -1928,14 +1938,17 @@ mod tests {
         );
 
         // Discoverable by id in home B with no path hint.
-        let store_b2 = LocalThreadStore::new(config_b.clone(), Some(
-            codex_state::StateRuntime::init(
-                config_b.sqlite.clone(),
-                config_b.default_model_provider_id.clone(),
-            )
-            .await
-            .expect("state db b2 should initialize"),
-        ));
+        let store_b2 = LocalThreadStore::new(
+            config_b.clone(),
+            Some(
+                codex_state::StateRuntime::init(
+                    config_b.sqlite.clone(),
+                    config_b.default_model_provider_id.clone(),
+                )
+                .await
+                .expect("state db b2 should initialize"),
+            ),
+        );
         let read = store_b2
             .read_thread(ReadThreadParams {
                 thread_id,

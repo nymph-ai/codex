@@ -24,6 +24,8 @@ use crate::thread_sample::SampleTask;
 use crate::thread_sample::SampleThread;
 use crate::thread_sample::generate_sample;
 use codex_app_server_protocol::SelectedCapabilityRoot;
+use codex_app_server_protocol::ThreadImportParams;
+use codex_app_server_protocol::ThreadImportResponse;
 use codex_app_server_protocol::ThreadHistoryMode as ApiThreadHistoryMode;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadItemPayload;
@@ -714,6 +716,43 @@ impl ThreadRequestProcessor {
             ))
             .await;
         Ok(None)
+    }
+
+    /// Cross-daemon restore: adopt a rollout written by another daemon into
+    /// this daemon's store. Import only registers the thread; drive it with
+    /// `thread/resume` by id afterwards, exactly like a natively written
+    /// thread. Resume-by-path semantics are unchanged.
+    pub(crate) async fn thread_import(
+        &self,
+        params: ThreadImportParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+        let destination = self
+            .thread_store
+            .import_rollout(params.path)
+            .await
+            .map_err(|err| thread_store_mutation_error("import", err))?;
+        let stored_thread = self
+            .thread_store
+            .read_thread_by_rollout_path(StoreReadThreadByRolloutPathParams {
+                rollout_path: destination.clone(),
+                include_archived: true,
+                include_history: false,
+            })
+            .await
+            .map_err(thread_store_resume_read_error)?;
+        let (thread, _) = thread_from_stored_thread(
+            stored_thread,
+            self.config.model_provider_id.as_str(),
+            &self.config.cwd,
+        );
+        Ok(Some(
+            ThreadImportResponse {
+                thread,
+                path: destination,
+            }
+            .into(),
+        ))
     }
 
     pub(crate) async fn thread_archive(
@@ -5098,32 +5137,11 @@ impl ThreadRequestProcessor {
             self.thread_store.read_thread(params).await
         };
 
-        let mut stored_thread = result.map_err(thread_store_resume_read_error)?;
-        // Cross-daemon resume: adopt a foreign rollout into this store before
-        // any by-id history load, so paginated model-context loading and
-        // thread/list see the thread. Stores without an import operation
-        // keep their previous behavior.
-        let mut adopted = false;
-        if let Some(requested_path) = path {
-            match self.thread_store.import_rollout(requested_path.clone()).await {
-                Ok(destination) => {
-                    adopted = destination != *requested_path;
-                    stored_thread.rollout_path = Some(destination);
-                }
-                Err(ThreadStoreError::Unsupported { .. }) => {}
-                Err(err) => return Err(thread_store_resume_read_error(err)),
-            }
-        }
-        if !adopted
-            && let Some(requested_path) = path
+        let stored_thread = result.map_err(thread_store_resume_read_error)?;
+        if let Some(requested_path) = path
             && matches!(stored_thread.history_mode, ThreadHistoryMode::Paginated)
         {
-            // Cross-daemon resume: a thread read from a foreign rollout path
-            // is not registered in this store yet, so there is no current
-            // path to be stale against. Store-level resume adopts and
-            // registers it; only enforce the stale-path check when the
-            // thread is already known locally.
-            let current_thread = match self
+            let current_thread = self
                 .thread_store
                 .read_thread(StoreReadThreadParams {
                     thread_id: stored_thread.thread_id,
@@ -5131,14 +5149,8 @@ impl ThreadRequestProcessor {
                     include_history: false,
                 })
                 .await
-            {
-                Ok(current_thread) => Some(current_thread),
-                Err(ThreadStoreError::ThreadNotFound { .. }) => None,
-                Err(err) => return Err(thread_store_resume_read_error(err)),
-            };
-            if let Some(current_path) = current_thread
-                .as_ref()
-                .and_then(|thread| thread.rollout_path.as_ref())
+                .map_err(thread_store_resume_read_error)?;
+            if let Some(current_path) = current_thread.rollout_path.as_ref()
                 && !path_utils::paths_match_after_normalization(
                     codex_rollout::plain_rollout_path(requested_path).as_path(),
                     codex_rollout::plain_rollout_path(current_path).as_path(),

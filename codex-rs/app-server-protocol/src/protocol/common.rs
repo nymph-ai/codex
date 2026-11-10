@@ -603,6 +603,12 @@ client_request_definitions! {
         serialization: None,
         response: v2::ThreadSampleCancelResponse,
     },
+    #[experimental("thread/import")]
+    ThreadImport => "thread/import" {
+        params: v2::ThreadImportParams,
+        serialization: None,
+        response: v2::ThreadImportResponse,
+    },
     ThreadArchive => "thread/archive" {
         params: v2::ThreadArchiveParams,
         serialization: thread_id(params.thread_id),

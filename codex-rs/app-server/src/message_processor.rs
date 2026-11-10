@@ -1452,6 +1452,9 @@ impl MessageProcessor {
                     .await;
                 Ok(Some(ThreadSampleCancelResponse {}.into()))
             }
+            ClientRequest::ThreadImport { params, .. } => {
+                self.thread_processor.thread_import(params).await
+            }
             ClientRequest::ThreadArchive { params, .. } => {
                 self.thread_processor
                     .thread_archive(request_id.clone(), params)

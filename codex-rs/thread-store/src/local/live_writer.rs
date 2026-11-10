@@ -100,11 +100,6 @@ pub(super) async fn resume_thread(
     };
     let rollout_path =
         super::read_thread::resolve_requested_rollout_path(store, rollout_path).await?;
-    // Cross-daemon resume: a rollout outside this store's home was written by
-    // another daemon (or a bare CLI session). Adopt it into this store so the
-    // resumed writer appends to a store-owned file and the thread becomes
-    // discoverable by id, instead of aliasing the foreign file in place.
-    let rollout_path = adopt_foreign_rollout(store, params.thread_id, rollout_path).await?;
     if !params.include_archived
         && super::helpers::rollout_path_is_archived(&store.config.codex_home, &rollout_path)
     {
@@ -197,15 +192,18 @@ async fn adopt_foreign_rollout(
     }
     // Preserve the sessions/YYYY/MM/DD/file (or archived_sessions/...) suffix
     // when the source path carries one; otherwise file by name under sessions/.
-    let relative = [codex_rollout::SESSIONS_SUBDIR, codex_rollout::ARCHIVED_SESSIONS_SUBDIR]
-        .iter()
-        .find_map(|root| {
-            let components: Vec<_> = rollout_path.components().collect();
-            let index = components
-                .iter()
-                .position(|component| component.as_os_str() == *root)?;
-            Some(components[index + 1..].iter().collect::<PathBuf>())
-        });
+    let relative = [
+        codex_rollout::SESSIONS_SUBDIR,
+        codex_rollout::ARCHIVED_SESSIONS_SUBDIR,
+    ]
+    .iter()
+    .find_map(|root| {
+        let components: Vec<_> = rollout_path.components().collect();
+        let index = components
+            .iter()
+            .position(|component| component.as_os_str() == *root)?;
+        Some(components[index + 1..].iter().collect::<PathBuf>())
+    });
     let destination = match &relative {
         Some(relative) if !relative.as_os_str().is_empty() => {
             let archived = rollout_path
@@ -218,14 +216,15 @@ async fn adopt_foreign_rollout(
             }
         }
         _ => {
-            let file_name = rollout_path.file_name().ok_or_else(|| {
-                ThreadStoreError::InvalidRequest {
-                    message: format!(
-                        "rollout path `{}` has no file name",
-                        rollout_path.display()
-                    ),
-                }
-            })?;
+            let file_name =
+                rollout_path
+                    .file_name()
+                    .ok_or_else(|| ThreadStoreError::InvalidRequest {
+                        message: format!(
+                            "rollout path `{}` has no file name",
+                            rollout_path.display()
+                        ),
+                    })?;
             sessions_root.join(file_name)
         }
     };
@@ -244,9 +243,14 @@ async fn adopt_foreign_rollout(
             });
         }
     } else {
-        let parent = destination.parent().ok_or_else(|| ThreadStoreError::Internal {
-            message: format!("rollout destination `{}` has no parent", destination.display()),
-        })?;
+        let parent = destination
+            .parent()
+            .ok_or_else(|| ThreadStoreError::Internal {
+                message: format!(
+                    "rollout destination `{}` has no parent",
+                    destination.display()
+                ),
+            })?;
         tokio::fs::create_dir_all(parent)
             .await
             .map_err(thread_store_io_error)?;

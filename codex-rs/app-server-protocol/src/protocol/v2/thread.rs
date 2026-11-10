@@ -725,6 +725,26 @@ pub struct ThreadArchiveResponse {}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ThreadImportParams {
+    /// Rollout file written by another daemon (or a bare CLI session) to
+    /// adopt into this daemon's thread store. The source file is never
+    /// mutated; future appends land in the store-owned copy. After import,
+    /// resume the thread by id with `thread/resume`.
+    pub path: PathBuf,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadImportResponse {
+    pub thread: Thread,
+    /// Store-owned rollout path the thread was adopted into.
+    pub path: PathBuf,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ThreadDeleteParams {
     pub thread_id: String,
 }

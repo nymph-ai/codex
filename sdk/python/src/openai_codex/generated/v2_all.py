@@ -2601,6 +2601,22 @@ class McpAuthStatus(Enum):
     o_auth = "oAuth"
 
 
+class McpGetAuthTokenParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    force_refresh: Annotated[bool | None, Field(alias="forceRefresh")] = None
+    server_name: Annotated[str, Field(alias="serverName")]
+
+
+class McpGetAuthTokenResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    access_token: Annotated[str, Field(alias="accessToken")]
+    expires_at: Annotated[int | None, Field(alias="expiresAt", ge=0)] = None
+
+
 class McpResourceReadTarget(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -8108,6 +8124,15 @@ class McpServerOauthLoginRequest(BaseModel):
         Literal["mcpServer/oauth/login"], Field(title="McpServer/oauth/loginRequestMethod")
     ]
     params: McpServerOauthLoginParams
+
+
+class McpGetAuthTokenRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["mcp/getAuthToken"], Field(title="Mcp/getAuthTokenRequestMethod")]
+    params: McpGetAuthTokenParams
 
 
 class ConfigMcpServerReloadRequest(BaseModel):
@@ -13728,6 +13753,7 @@ class ClientRequest(
         | PermissionProfileListRequest
         | ExperimentalFeatureEnablementSetRequest
         | McpServerOauthLoginRequest
+        | McpGetAuthTokenRequest
         | ConfigMcpServerReloadRequest
         | McpServerStatusListRequest
         | McpServerResourceReadRequest
@@ -13840,6 +13866,7 @@ class ClientRequest(
         | PermissionProfileListRequest
         | ExperimentalFeatureEnablementSetRequest
         | McpServerOauthLoginRequest
+        | McpGetAuthTokenRequest
         | ConfigMcpServerReloadRequest
         | McpServerStatusListRequest
         | McpServerResourceReadRequest
