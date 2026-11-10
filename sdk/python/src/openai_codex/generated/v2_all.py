@@ -2681,6 +2681,22 @@ class McpAuthStatus(Enum):
     o_auth = "oAuth"
 
 
+class McpGetAuthTokenParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    force_refresh: Annotated[bool | None, Field(alias="forceRefresh")] = None
+    server_name: Annotated[str, Field(alias="serverName")]
+
+
+class McpGetAuthTokenResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    access_token: Annotated[str, Field(alias="accessToken")]
+    expires_at: Annotated[int | None, Field(alias="expiresAt", ge=0)] = None
+
+
 class McpResourceReadTarget(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -5735,6 +5751,27 @@ class ThreadId(RootModel[str]):
     root: str
 
 
+class ThreadImportSnapshotChunk(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    is_final: Annotated[
+        bool,
+        Field(
+            alias="isFinal",
+            description="Whether this is the last chunk; adoption runs on the final chunk.",
+        ),
+    ]
+    lines: Annotated[list[str], Field(description="Verbatim rollout JSONL lines for this chunk.")]
+    snapshot_id: Annotated[
+        str,
+        Field(
+            alias="snapshotId",
+            description="Caller-chosen staging identifier, unique per transfer (`[A-Za-z0-9_-]{1,64}`).",
+        ),
+    ]
+
+
 class ThreadInjectItemsParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -8364,6 +8401,15 @@ class McpServerOauthLoginRequest(BaseModel):
         Literal["mcpServer/oauth/login"], Field(title="McpServer/oauth/loginRequestMethod")
     ]
     params: McpServerOauthLoginParams
+
+
+class McpGetAuthTokenRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["mcp/getAuthToken"], Field(title="Mcp/getAuthTokenRequestMethod")]
+    params: McpGetAuthTokenParams
 
 
 class ConfigMcpServerReloadRequest(BaseModel):
@@ -14148,6 +14194,7 @@ class ClientRequest(
         | PermissionProfileListRequest
         | ExperimentalFeatureEnablementSetRequest
         | McpServerOauthLoginRequest
+        | McpGetAuthTokenRequest
         | ConfigMcpServerReloadRequest
         | McpServerStatusListRequest
         | McpServerResourceReadRequest
@@ -14261,6 +14308,7 @@ class ClientRequest(
         | PermissionProfileListRequest
         | ExperimentalFeatureEnablementSetRequest
         | McpServerOauthLoginRequest
+        | McpGetAuthTokenRequest
         | ConfigMcpServerReloadRequest
         | McpServerStatusListRequest
         | McpServerResourceReadRequest
