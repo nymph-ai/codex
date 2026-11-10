@@ -100,6 +100,11 @@ pub(super) async fn resume_thread(
     };
     let rollout_path =
         super::read_thread::resolve_requested_rollout_path(store, rollout_path).await?;
+    // Cross-daemon resume: a rollout outside this store's home was written by
+    // another daemon (or a bare CLI session). Adopt it into this store so the
+    // resumed writer appends to a store-owned file and the thread becomes
+    // discoverable by id, instead of aliasing the foreign file in place.
+    let rollout_path = adopt_foreign_rollout(store, params.thread_id, rollout_path).await?;
     if !params.include_archived
         && super::helpers::rollout_path_is_archived(&store.config.codex_home, &rollout_path)
     {
@@ -168,6 +173,121 @@ pub(super) async fn resume_thread(
         )
         .await?;
     Ok(history)
+}
+
+/// Adopt a rollout written outside this store's home (cross-daemon resume).
+///
+/// The foreign file is copied to the equivalent sessions/archived_sessions
+/// location under this store's home and projected into SQLite, so the thread
+/// becomes discoverable by id (`thread/list`, `thread/read`) and the resumed
+/// writer appends to the store-owned copy. The source file is never mutated.
+/// Rollouts already under this home pass through unchanged. If the destination
+/// already exists with different content length, adoption refuses rather than
+/// guessing which lineage wins; resume by thread id in that case.
+async fn adopt_foreign_rollout(
+    store: &LocalThreadStore,
+    thread_id: ThreadId,
+    rollout_path: PathBuf,
+) -> ThreadStoreResult<PathBuf> {
+    let codex_home = store.config.codex_home.as_path();
+    let sessions_root = codex_home.join(codex_rollout::SESSIONS_SUBDIR);
+    let archived_root = codex_home.join(codex_rollout::ARCHIVED_SESSIONS_SUBDIR);
+    if rollout_path.starts_with(&sessions_root) || rollout_path.starts_with(&archived_root) {
+        return Ok(rollout_path);
+    }
+    // Preserve the sessions/YYYY/MM/DD/file (or archived_sessions/...) suffix
+    // when the source path carries one; otherwise file by name under sessions/.
+    let relative = [codex_rollout::SESSIONS_SUBDIR, codex_rollout::ARCHIVED_SESSIONS_SUBDIR]
+        .iter()
+        .find_map(|root| {
+            let components: Vec<_> = rollout_path.components().collect();
+            let index = components
+                .iter()
+                .position(|component| component.as_os_str() == *root)?;
+            Some(components[index + 1..].iter().collect::<PathBuf>())
+        });
+    let destination = match &relative {
+        Some(relative) if !relative.as_os_str().is_empty() => {
+            let archived = rollout_path
+                .components()
+                .any(|component| component.as_os_str() == codex_rollout::ARCHIVED_SESSIONS_SUBDIR);
+            if archived {
+                archived_root.join(relative)
+            } else {
+                sessions_root.join(relative)
+            }
+        }
+        _ => {
+            let file_name = rollout_path.file_name().ok_or_else(|| {
+                ThreadStoreError::InvalidRequest {
+                    message: format!(
+                        "rollout path `{}` has no file name",
+                        rollout_path.display()
+                    ),
+                }
+            })?;
+            sessions_root.join(file_name)
+        }
+    };
+    if let Ok(existing) = tokio::fs::metadata(&destination).await {
+        let source_len = tokio::fs::metadata(&rollout_path)
+            .await
+            .map_err(thread_store_io_error)?
+            .len();
+        if existing.len() != source_len {
+            return Err(ThreadStoreError::InvalidRequest {
+                message: format!(
+                    "thread {thread_id} already exists in this store at `{}` \
+                     with different rollout content; resume by thread id instead",
+                    destination.display()
+                ),
+            });
+        }
+    } else {
+        let parent = destination.parent().ok_or_else(|| ThreadStoreError::Internal {
+            message: format!("rollout destination `{}` has no parent", destination.display()),
+        })?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(thread_store_io_error)?;
+        // Copy to a sibling temp name and rename so a crash mid-copy cannot
+        // leave a torn rollout at the canonical path.
+        let staging = destination.with_extension("importing");
+        tokio::fs::copy(&rollout_path, &staging)
+            .await
+            .map_err(thread_store_io_error)?;
+        tokio::fs::rename(&staging, &destination)
+            .await
+            .map_err(thread_store_io_error)?;
+        tracing::info!(
+            %thread_id,
+            source = %rollout_path.display(),
+            destination = %destination.display(),
+            "adopted foreign rollout into thread store"
+        );
+    }
+    super::thread_history_materialization::materialize_to_sqlite(store, thread_id, &destination)
+        .await?;
+    Ok(destination)
+}
+
+/// Entry point for `ThreadStore::import_rollout`: resolve the path, derive the
+/// thread id from the rollout's own session header, and adopt it.
+pub(super) async fn import_rollout(
+    store: &LocalThreadStore,
+    rollout_path: PathBuf,
+) -> ThreadStoreResult<PathBuf> {
+    let rollout_path =
+        super::read_thread::resolve_requested_rollout_path(store, rollout_path).await?;
+    let session_meta = codex_rollout::read_session_meta_line(&rollout_path)
+        .await
+        .map_err(|err| ThreadStoreError::Internal {
+            message: format!(
+                "failed to read rollout metadata {}: {err}",
+                rollout_path.display()
+            ),
+        })?;
+    adopt_foreign_rollout(store, session_meta.meta.id, rollout_path).await
 }
 
 #[tracing::instrument(
