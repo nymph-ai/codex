@@ -306,38 +306,50 @@ pub struct ReadThreadByRolloutPathParams {
     pub include_history: bool,
 }
 
-/// Parameters for exporting one chunk of a thread snapshot (cross-daemon
-/// restore). Lines are verbatim rollout JSONL records in replay order.
+/// Parameters for exporting a daemon-owned thread archive (cross-daemon
+/// snapshot/restore). The archive carries the thread's full rollout lineage
+/// plus its goal and attachment state; it is written by the owning daemon,
+/// never assembled by callers from rollout bytes.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SnapshotRolloutParams {
-    /// Thread to snapshot.
+pub struct ExportThreadArchiveParams {
+    /// Thread to export. The thread must be cold: no live writer may exist.
     pub thread_id: ThreadId,
-    /// Line offset to start from (0 for the first chunk).
-    pub offset: u64,
-    /// Maximum number of lines to return.
-    pub limit: usize,
+    /// Archive the source thread as part of the export, fencing it against
+    /// further local resume. This is the exact-move mode; without it the
+    /// export is a plain snapshot and the source stays resumable.
+    pub archive_source: bool,
 }
 
-/// One chunk of verbatim rollout lines from `snapshot_rollout`.
+/// Result of a successful thread archive export.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SnapshotRolloutChunk {
-    /// Verbatim rollout JSONL lines (without trailing newlines).
-    pub lines: Vec<String>,
-    /// Offset of the next unread line, or `None` at end of rollout.
-    pub next_offset: Option<u64>,
+pub struct ExportedThreadArchive {
+    /// Thread contained in the archive.
+    pub thread_id: ThreadId,
+    /// Daemon-owned archive file path on the exporting host.
+    pub archive_path: PathBuf,
+    /// Lowercase hex SHA-256 of the archive file bytes.
+    pub sha256: String,
+    /// Archive file size in bytes.
+    pub byte_len: u64,
+    /// Whether the source thread is archived (fenced) after this export.
+    pub source_archived: bool,
 }
 
-/// Parameters for importing one snapshot chunk. Chunks sharing a snapshot id
-/// append to the same staging rollout; the final chunk adopts it into the
-/// store. Snapshot ids are caller-chosen and must match `[A-Za-z0-9_-]{1,64}`.
+/// Parameters for importing a thread archive produced by
+/// `export_thread_archive` on another daemon.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ImportSnapshotChunkParams {
-    /// Caller-chosen staging identifier, unique per transfer.
-    pub snapshot_id: String,
-    /// Verbatim rollout JSONL lines for this chunk.
-    pub lines: Vec<String>,
-    /// Whether this is the last chunk; adoption runs on the final chunk.
-    pub is_final: bool,
+pub struct ImportThreadArchiveParams {
+    /// Archive file path readable by this daemon.
+    pub archive_path: PathBuf,
+}
+
+/// Result of a successful thread archive import.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportedThreadArchive {
+    /// Thread restored from the archive.
+    pub thread_id: ThreadId,
+    /// Store-owned rollout path for the thread's current segment.
+    pub rollout_path: PathBuf,
 }
 
 /// The sort key to use when listing stored threads.

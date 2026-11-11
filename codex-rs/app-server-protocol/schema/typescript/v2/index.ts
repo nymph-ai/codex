@@ -550,7 +550,6 @@ export type { ThreadGoalSetResponse } from "./ThreadGoalSetResponse";
 export type { ThreadGoalStatus } from "./ThreadGoalStatus";
 export type { ThreadGoalUpdatedNotification } from "./ThreadGoalUpdatedNotification";
 export type { ThreadHistoryMode } from "./ThreadHistoryMode";
-export type { ThreadImportSnapshotChunk } from "./ThreadImportSnapshotChunk";
 export type { ThreadInjectItemsParams } from "./ThreadInjectItemsParams";
 export type { ThreadInjectItemsResponse } from "./ThreadInjectItemsResponse";
 export type { ThreadItem } from "./ThreadItem";

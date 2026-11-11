@@ -609,11 +609,11 @@ client_request_definitions! {
         serialization: None,
         response: v2::ThreadImportResponse,
     },
-    #[experimental("thread/snapshot")]
-    ThreadSnapshot => "thread/snapshot" {
-        params: v2::ThreadSnapshotParams,
+    #[experimental("thread/export")]
+    ThreadExport => "thread/export" {
+        params: v2::ThreadExportParams,
         serialization: thread_id(params.thread_id),
-        response: v2::ThreadSnapshotResponse,
+        response: v2::ThreadExportResponse,
     },
     ThreadArchive => "thread/archive" {
         params: v2::ThreadArchiveParams,

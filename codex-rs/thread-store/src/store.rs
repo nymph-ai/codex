@@ -21,7 +21,10 @@ use crate::DeleteThreadParams;
 use crate::DeleteThreadSectionParams;
 use crate::DeleteThreadsParams;
 use crate::DeletedProject;
-use crate::ImportSnapshotChunkParams;
+use crate::ExportThreadArchiveParams;
+use crate::ExportedThreadArchive;
+use crate::ImportThreadArchiveParams;
+use crate::ImportedThreadArchive;
 use crate::ItemPage;
 use crate::ListItemsParams;
 use crate::ListProjectsParams;
@@ -45,8 +48,6 @@ use crate::ResumeThreadParams;
 use crate::RevertThreadParams;
 use crate::SearchThreadOccurrencesParams;
 use crate::SearchThreadsParams;
-use crate::SnapshotRolloutChunk;
-use crate::SnapshotRolloutParams;
 use crate::StoredModelContext;
 use crate::StoredProject;
 use crate::StoredProjectsPage;
@@ -223,29 +224,31 @@ pub trait ThreadStore: Any + Send + Sync {
         })
     }
 
-    /// Exports one chunk of verbatim rollout lines for cross-daemon restore.
-    /// Pair with `import_snapshot_chunk` on the receiving store. The default
-    /// is unsupported.
-    fn snapshot_rollout(
+    /// Exports a daemon-owned archive of one cold thread (cross-daemon
+    /// snapshot/restore). With `archive_source`, the source thread is
+    /// archived under its writer locks as part of the export so exactly one
+    /// daemon can drive the thread afterwards. The default is unsupported.
+    fn export_thread_archive(
         &self,
-        _params: SnapshotRolloutParams,
-    ) -> ThreadStoreFuture<'_, SnapshotRolloutChunk> {
+        _params: ExportThreadArchiveParams,
+    ) -> ThreadStoreFuture<'_, ExportedThreadArchive> {
         Box::pin(async {
             Err(ThreadStoreError::Unsupported {
-                operation: "snapshot_rollout",
+                operation: "export_thread_archive",
             })
         })
     }
 
-    /// Receives one snapshot chunk. Returns the adopted rollout path on the
-    /// final chunk and `None` while staging. The default is unsupported.
-    fn import_snapshot_chunk(
+    /// Imports a thread archive exported by another daemon, installing the
+    /// thread with its original id so a later resume by id behaves exactly
+    /// like resuming a natively written thread. The default is unsupported.
+    fn import_thread_archive(
         &self,
-        _params: ImportSnapshotChunkParams,
-    ) -> ThreadStoreFuture<'_, Option<PathBuf>> {
+        _params: ImportThreadArchiveParams,
+    ) -> ThreadStoreFuture<'_, ImportedThreadArchive> {
         Box::pin(async {
             Err(ThreadStoreError::Unsupported {
-                operation: "import_snapshot_chunk",
+                operation: "import_thread_archive",
             })
         })
     }
