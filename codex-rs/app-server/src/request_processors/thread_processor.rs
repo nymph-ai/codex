@@ -24,6 +24,8 @@ use crate::thread_sample::SampleTask;
 use crate::thread_sample::SampleThread;
 use crate::thread_sample::generate_sample;
 use codex_app_server_protocol::SelectedCapabilityRoot;
+use codex_app_server_protocol::ThreadExportParams;
+use codex_app_server_protocol::ThreadExportResponse;
 use codex_app_server_protocol::ThreadHistoryMode as ApiThreadHistoryMode;
 use codex_app_server_protocol::ThreadImportParams;
 use codex_app_server_protocol::ThreadImportResponse;
@@ -41,8 +43,6 @@ use codex_app_server_protocol::ThreadSectionAppearance;
 use codex_app_server_protocol::ThreadSectionChangedNotification;
 use codex_app_server_protocol::ThreadSectionMoveParams;
 use codex_app_server_protocol::ThreadSectionMoveResponse;
-use codex_app_server_protocol::ThreadSnapshotParams;
-use codex_app_server_protocol::ThreadSnapshotResponse;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ThreadIdleCause;
@@ -729,37 +729,26 @@ impl ThreadRequestProcessor {
         params: ThreadImportParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
-        let destination = match (params.path, params.snapshot) {
-            (Some(path), None) => Some(
-                self.thread_store
-                    .import_rollout(path)
-                    .await
-                    .map_err(|err| thread_store_mutation_error("import", err))?,
-            ),
-            (None, Some(chunk)) => self
+        let destination = match (params.path, params.archive_path) {
+            (Some(path), None) => self
                 .thread_store
-                .import_snapshot_chunk(codex_thread_store::ImportSnapshotChunkParams {
-                    snapshot_id: chunk.snapshot_id,
-                    lines: chunk.lines,
-                    is_final: chunk.is_final,
-                })
+                .import_rollout(path)
                 .await
                 .map_err(|err| thread_store_mutation_error("import", err))?,
+            (None, Some(archive_path)) => {
+                self.thread_store
+                    .import_thread_archive(codex_thread_store::ImportThreadArchiveParams {
+                        archive_path,
+                    })
+                    .await
+                    .map_err(|err| thread_store_mutation_error("import", err))?
+                    .rollout_path
+            }
             _ => {
                 return Err(invalid_request(
-                    "exactly one of `path` or `snapshot` must be set",
+                    "exactly one of `path` or `archivePath` must be set",
                 ));
             }
-        };
-        let Some(destination) = destination else {
-            // Still staging snapshot chunks; nothing adopted yet.
-            return Ok(Some(
-                ThreadImportResponse {
-                    thread: None,
-                    path: None,
-                }
-                .into(),
-            ));
         };
         let stored_thread = self
             .thread_store
@@ -777,45 +766,81 @@ impl ThreadRequestProcessor {
         );
         Ok(Some(
             ThreadImportResponse {
-                thread: Some(thread),
-                path: Some(destination),
+                thread,
+                path: destination,
             }
             .into(),
         ))
     }
 
-    /// Exports verbatim rollout lines for cross-daemon restore. The cursor
-    /// is an opaque decimal line offset minted by a previous response.
-    pub(crate) async fn thread_snapshot(
+    /// Cross-daemon snapshot/restore: pack one cold thread into a
+    /// daemon-owned archive (lineage, goal, attachments) for
+    /// `thread/import` on another daemon. A loaded thread must be idle;
+    /// it is persisted and unloaded first, so the archive is taken at a
+    /// quiescent checkpoint, never mid-turn. With `archiveSource` the
+    /// store archives the source as part of the export (exact move), and
+    /// subscribers hear about it like any other archive.
+    pub(crate) async fn thread_export(
         &self,
-        params: ThreadSnapshotParams,
+        request_id: ConnectionRequestId,
+        params: ThreadExportParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
         let thread_id = ThreadId::from_string(&params.thread_id)
             .map_err(|_| invalid_request(format!("invalid thread id `{}`", params.thread_id)))?;
-        let offset = match params.cursor.as_deref() {
-            None | Some("") => 0,
-            Some(cursor) => cursor
-                .parse::<u64>()
-                .map_err(|_| invalid_request("invalid snapshot cursor"))?,
-        };
-        let limit = params.limit.unwrap_or(1_000).clamp(1, 10_000) as usize;
-        let chunk = self
+        let subtree_thread_ids = self.state_db_spawn_subtree_thread_ids(thread_id).await?;
+        if subtree_thread_ids.len() > 1 {
+            return Err(invalid_request(format!(
+                "thread {thread_id} has spawned descendants; thread archives move one thread at a time"
+            )));
+        }
+        if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
+            let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+            let has_active_turn = thread_state.lock().await.active_turn_snapshot().is_some();
+            if has_active_turn || matches!(thread.agent_status().await, AgentStatus::Running) {
+                return Err(invalid_request(format!(
+                    "thread {thread_id} is mid-turn; let it finish or interrupt it before exporting it"
+                )));
+            }
+            if !thread.config_snapshot().await.ephemeral {
+                self.thread_store
+                    .persist_thread(thread_id, PersistContext::Standard)
+                    .await
+                    .map_err(|err| thread_store_mutation_error("export", err))?;
+            }
+            self.prepare_thread_for_archive(thread_id).await?;
+        }
+        let exported = self
             .thread_store
-            .snapshot_rollout(codex_thread_store::SnapshotRolloutParams {
+            .export_thread_archive(codex_thread_store::ExportThreadArchiveParams {
                 thread_id,
-                offset,
-                limit,
+                archive_source: params.archive_source,
             })
             .await
-            .map_err(thread_store_resume_read_error)?;
-        Ok(Some(
-            ThreadSnapshotResponse {
-                thread_id: params.thread_id,
-                lines: chunk.lines,
-                next_cursor: chunk.next_offset.map(|next| next.to_string()),
-            }
-            .into(),
-        ))
+            .map_err(|err| thread_store_mutation_error("export", err))?;
+        let source_archived = exported.source_archived;
+        self.outgoing
+            .send_response(
+                request_id,
+                ThreadExportResponse {
+                    thread_id: exported.thread_id.to_string(),
+                    archive_path: exported.archive_path,
+                    sha256: exported.sha256,
+                    byte_len: exported.byte_len,
+                    source_archived,
+                },
+            )
+            .await;
+        if source_archived {
+            self.outgoing
+                .send_server_notification(ServerNotification::ThreadArchived(
+                    ThreadArchivedNotification {
+                        thread_id: thread_id.to_string(),
+                    },
+                ))
+                .await;
+        }
+        Ok(None)
     }
 
     pub(crate) async fn thread_archive(

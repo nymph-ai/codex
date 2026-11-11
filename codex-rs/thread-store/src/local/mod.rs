@@ -18,12 +18,12 @@ mod rollout_migration;
 #[allow(dead_code)]
 mod rollout_lineage;
 mod search_threads;
-mod snapshot;
 mod thread_attachments;
 mod thread_history;
 mod thread_history_materialization;
 mod thread_rollout_resolver;
 mod thread_sections;
+mod transfer;
 mod unarchive_thread;
 mod update_thread_metadata;
 
@@ -583,18 +583,18 @@ impl ThreadStore for LocalThreadStore {
         Box::pin(async move { live_writer::import_rollout(self, rollout_path).await })
     }
 
-    fn snapshot_rollout(
+    fn export_thread_archive(
         &self,
-        params: crate::SnapshotRolloutParams,
-    ) -> ThreadStoreFuture<'_, crate::SnapshotRolloutChunk> {
-        Box::pin(async move { snapshot::snapshot_rollout(self, params).await })
+        params: crate::ExportThreadArchiveParams,
+    ) -> ThreadStoreFuture<'_, crate::ExportedThreadArchive> {
+        Box::pin(async move { transfer::export_thread_archive(self, params).await })
     }
 
-    fn import_snapshot_chunk(
+    fn import_thread_archive(
         &self,
-        params: crate::ImportSnapshotChunkParams,
-    ) -> ThreadStoreFuture<'_, Option<std::path::PathBuf>> {
-        Box::pin(async move { snapshot::import_snapshot_chunk(self, params).await })
+        params: crate::ImportThreadArchiveParams,
+    ) -> ThreadStoreFuture<'_, crate::ImportedThreadArchive> {
+        Box::pin(async move { transfer::import_thread_archive(self, params).await })
     }
 
     fn append_items(&self, params: AppendThreadItemsParams) -> ThreadStoreFuture<'_, ()> {
@@ -1976,9 +1976,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn snapshot_round_trip_restores_thread_across_homes() {
-        // Cross-machine restore: snapshot lines out of home A, stage them
-        // into home B in chunks, final chunk adopts, resume by id works.
+    async fn archive_round_trip_moves_thread_goal_and_attachments_across_homes() {
+        // Exact cold move: home A exports a daemon-owned archive with the
+        // source fenced (archived); home B imports it and resumes the same
+        // thread id with goal counters and attachments intact.
         let home_a = TempDir::new().expect("temp dir a");
         let home_b = TempDir::new().expect("temp dir b");
         let config_a = test_config(home_a.path());
@@ -1997,72 +1998,198 @@ mod tests {
         .expect("state db b should initialize");
         let thread_id = ThreadId::default();
 
-        let store_a = LocalThreadStore::new(config_a, Some(runtime_a));
-        store_a
-            .create_thread(create_thread_params(thread_id))
+        let store_a = Arc::new(LocalThreadStore::new(config_a, Some(runtime_a.clone())));
+        let live_thread = LiveThread::create(store_a.clone(), create_thread_params(thread_id))
             .await
-            .expect("create thread in home a");
-        for text in ["snapshot me", "second line please", "third line please"] {
-            store_a
-                .append_items(AppendThreadItemsParams {
-                    thread_id,
-                    items: vec![user_message_item(text)],
-                })
-                .await
-                .expect("append in home a");
-        }
-        store_a
-            .persist_thread(thread_id, PersistContext::Standard)
+            .expect("create live thread in home a");
+        live_thread
+            .append_items(&[user_message_item("move me exactly")])
+            .await
+            .expect("append in home a");
+        live_thread
+            .persist(PersistContext::Standard)
             .await
             .expect("persist in home a");
-        store_a.flush_thread(thread_id).await.expect("flush home a");
-        store_a
-            .shutdown_thread(thread_id)
+        live_thread.flush().await.expect("flush home a");
+        live_thread
+            .shutdown()
             .await
             .expect("shutdown home a writer");
 
-        let mut all_lines = Vec::new();
-        let mut offset = 0u64;
-        loop {
-            let chunk = store_a
-                .snapshot_rollout(crate::SnapshotRolloutParams {
-                    thread_id,
-                    offset,
-                    limit: 2,
-                })
+        let created_at = chrono::DateTime::from_timestamp_millis(1_700_000_000_000)
+            .expect("valid goal created timestamp");
+        let updated_at = chrono::DateTime::from_timestamp_millis(1_700_000_123_000)
+            .expect("valid goal updated timestamp");
+        let goal = codex_state::ThreadGoal {
+            thread_id,
+            goal_id: "goal-exact-move".to_string(),
+            objective: "NYM-1915".to_string(),
+            status: codex_state::ThreadGoalStatus::Active,
+            token_budget: Some(9_000_000),
+            tokens_used: 23_336_509,
+            time_used_seconds: 238_515,
+            created_at,
+            updated_at,
+        };
+        runtime_a
+            .thread_goals()
+            .replace_thread_goal_snapshot(&goal)
+            .await
+            .expect("seed source goal");
+        runtime_a
+            .add_thread_attachment(
+                thread_id,
+                "role",
+                "astra",
+                &serde_json::json!({"bench": "crucible-bench"}),
+            )
+            .await
+            .expect("seed source attachment");
+
+        let exported = store_a
+            .export_thread_archive(crate::ExportThreadArchiveParams {
+                thread_id,
+                archive_source: true,
+            })
+            .await
+            .expect("export exact-move archive");
+        assert_eq!(exported.thread_id, thread_id);
+        assert!(exported.source_archived);
+        assert!(exported.archive_path.starts_with(home_a.path()));
+        assert!(exported.byte_len > 0);
+        assert_eq!(exported.sha256.len(), 64);
+
+        let source_read = store_a
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: true,
+                include_history: false,
+            })
+            .await
+            .expect("read fenced source thread");
+        assert!(
+            source_read.archived_at.is_some(),
+            "exact-move export must archive (fence) the source thread"
+        );
+
+        let store_b = LocalThreadStore::new(config_b, Some(runtime_b.clone()));
+        let imported = store_b
+            .import_thread_archive(crate::ImportThreadArchiveParams {
+                archive_path: exported.archive_path.clone(),
+            })
+            .await
+            .expect("import exact-move archive");
+        assert_eq!(imported.thread_id, thread_id);
+        assert!(imported.rollout_path.starts_with(home_b.path()));
+        assert_rollout_contains_message(imported.rollout_path.as_path(), "move me exactly").await;
+
+        let restored_goal = runtime_b
+            .thread_goals()
+            .get_thread_goal(thread_id)
+            .await
+            .expect("read restored goal")
+            .expect("goal must move with the thread");
+        assert_eq!(restored_goal, goal);
+
+        let attachments = runtime_b
+            .list_thread_attachments(thread_id, /*cursor*/ None, /*limit*/ 10)
+            .await
+            .expect("list restored attachments");
+        assert_eq!(attachments.attachments.len(), 1);
+        assert_eq!(attachments.attachments[0].attachment_type, "role");
+        assert_eq!(attachments.attachments[0].identity_key, "astra");
+        assert_eq!(
+            attachments.attachments[0].payload,
+            serde_json::json!({"bench": "crucible-bench"})
+        );
+
+        let read = store_b
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: false,
+                include_history: false,
+            })
+            .await
+            .expect("read moved thread as active in home b");
+        assert_eq!(read.thread_id, thread_id);
+        assert!(read.archived_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn archive_import_refuses_divergent_existing_thread() {
+        // A target that already owns the thread id with different bytes must
+        // refuse the move; importing must never guess which lineage wins.
+        let home_a = TempDir::new().expect("temp dir a");
+        let home_b = TempDir::new().expect("temp dir b");
+        let config_a = test_config(home_a.path());
+        let config_b = test_config(home_b.path());
+        let runtime_a = codex_state::StateRuntime::init(
+            config_a.sqlite.clone(),
+            config_a.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db a should initialize");
+        let runtime_b = codex_state::StateRuntime::init(
+            config_b.sqlite.clone(),
+            config_b.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db b should initialize");
+        let thread_id = ThreadId::default();
+
+        for (config, runtime, text) in [
+            (config_a, runtime_a, "source lineage text"),
+            (config_b.clone(), runtime_b.clone(), "target lineage text"),
+        ] {
+            let store = Arc::new(LocalThreadStore::new(config, Some(runtime)));
+            let live_thread = LiveThread::create(store, create_thread_params(thread_id))
                 .await
-                .expect("snapshot chunk");
-            offset += chunk.lines.len() as u64;
-            all_lines.extend(chunk.lines);
-            match chunk.next_offset {
-                Some(next) => offset = next,
-                None => break,
-            }
+                .expect("create thread");
+            live_thread
+                .append_items(&[user_message_item(text)])
+                .await
+                .expect("append thread text");
+            live_thread
+                .persist(PersistContext::Standard)
+                .await
+                .expect("persist thread");
+            live_thread.flush().await.expect("flush thread");
+            live_thread.shutdown().await.expect("shutdown writer");
         }
-        assert!(all_lines.len() > 2, "snapshot must span multiple chunks at limit 2");
+
+        let store_a = LocalThreadStore::new(
+            test_config(home_a.path()),
+            Some(
+                codex_state::StateRuntime::init(
+                    test_config(home_a.path()).sqlite,
+                    "test-provider".to_string(),
+                )
+                .await
+                .expect("reopen state db a"),
+            ),
+        );
+        let exported = store_a
+            .export_thread_archive(crate::ExportThreadArchiveParams {
+                thread_id,
+                archive_source: false,
+            })
+            .await
+            .expect("export source archive");
 
         let store_b = LocalThreadStore::new(config_b, Some(runtime_b));
-        let total = all_lines.len();
-        let mut adopted = None;
-        for (index, window) in all_lines.chunks(3).enumerate() {
-            let is_final = (index + 1) * 3 >= total;
-            let result = store_b
-                .import_snapshot_chunk(crate::ImportSnapshotChunkParams {
-                    snapshot_id: "spike-1".to_string(),
-                    lines: window.to_vec(),
-                    is_final,
-                })
-                .await
-                .expect("import chunk");
-            if is_final {
-                adopted = result;
-            } else {
-                assert!(result.is_none(), "non-final chunks only stage");
-            }
-        }
-        let adopted_path = adopted.expect("final chunk adopts");
-        assert!(adopted_path.starts_with(home_b.path()));
-        assert_rollout_contains_message(adopted_path.as_path(), "snapshot me").await;
+        let err = store_b
+            .import_thread_archive(crate::ImportThreadArchiveParams {
+                archive_path: exported.archive_path,
+            })
+            .await
+            .expect_err("divergent existing thread must refuse archive import");
+        assert!(
+            matches!(
+                err,
+                ThreadStoreError::Conflict { .. } | ThreadStoreError::InvalidRequest { .. }
+            ),
+            "expected a conflict-style refusal, got {err:?}"
+        );
         let read = store_b
             .read_thread(ReadThreadParams {
                 thread_id,
@@ -2070,8 +2197,153 @@ mod tests {
                 include_history: false,
             })
             .await
-            .expect("read restored thread by id in home b");
-        assert_eq!(read.thread_id, thread_id);
+            .expect("target thread remains readable after refused import");
+        let target_path = read.rollout_path.expect("target rollout path");
+        assert_rollout_contains_message(target_path.as_path(), "target lineage text").await;
+    }
+
+    #[tokio::test]
+    async fn archive_round_trip_carries_paginated_fork_lineage_across_homes() {
+        // A paginated fork's history spans two rollout files (the parent's
+        // segment plus its own); the archive must carry the whole lineage
+        // closure, not just the child's current file.
+        let home_a = TempDir::new().expect("temp dir a");
+        let home_b = TempDir::new().expect("temp dir b");
+        let config_a = test_config(home_a.path());
+        let config_b = test_config(home_b.path());
+        let runtime_a = codex_state::StateRuntime::init(
+            config_a.sqlite.clone(),
+            config_a.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db a should initialize");
+        let runtime_b = codex_state::StateRuntime::init(
+            config_b.sqlite.clone(),
+            config_b.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db b should initialize");
+        let parent_id = ThreadId::default();
+        let child_id = ThreadId::default();
+
+        fn paginated_item(thread_id: ThreadId, turn_id: &str, item_id: &str) -> RolloutItem {
+            RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+                content_token_count: None,
+                thread_id,
+                turn_id: turn_id.to_string(),
+                item: TurnItem::UserMessage(UserMessageItem {
+                    id: item_id.to_string(),
+                    client_id: None,
+                    content: Vec::new(),
+                }),
+                started_at_ms: Some(0),
+                completed_at_ms: 1,
+            }))
+        }
+
+        let store_a = Arc::new(LocalThreadStore::new(config_a, Some(runtime_a)));
+        let mut parent_params = create_thread_params(parent_id);
+        parent_params.history_mode = ThreadHistoryMode::Paginated;
+        let parent = LiveThread::create(store_a.clone(), parent_params)
+            .await
+            .expect("create paginated parent");
+        parent
+            .append_items(&[paginated_item(parent_id, "turn-parent", "item-parent")])
+            .await
+            .expect("append parent item");
+        parent
+            .persist(PersistContext::Standard)
+            .await
+            .expect("persist parent");
+        parent.flush().await.expect("flush parent");
+
+        let prepared = store_a
+            .prepare_fork(PrepareForkParams {
+                thread_id: parent_id,
+                boundary: crate::ForkBoundary::Latest,
+            })
+            .await
+            .expect("prepare fork from parent");
+        let mut child_params = create_thread_params(child_id);
+        child_params.history_mode = ThreadHistoryMode::Paginated;
+        child_params.forked_from_id = Some(parent_id);
+        child_params.history_base = prepared.history_base;
+        let mut guard = crate::LiveThreadInitGuard::default();
+        let child = LiveThread::create_with_inherited_model_context(
+            store_a.clone(),
+            child_params,
+            &prepared.model_context,
+            &mut guard,
+        )
+        .await
+        .expect("create paginated fork child");
+        guard.commit();
+        // The prepared fork reserves the parent's lifecycle until dropped;
+        // the export below takes that lock, as archive does.
+        drop(prepared);
+        child
+            .append_items(&[paginated_item(child_id, "turn-child", "item-child")])
+            .await
+            .expect("append child item");
+        child
+            .persist(PersistContext::Standard)
+            .await
+            .expect("persist child");
+        child.flush().await.expect("flush child");
+        child.shutdown().await.expect("shutdown child writer");
+        parent.shutdown().await.expect("shutdown parent writer");
+
+        let source_lineage = store_a
+            .resolve_rollout_lineage(child_id, None)
+            .await
+            .expect("resolve source lineage");
+        assert_eq!(
+            source_lineage.segments.len(),
+            2,
+            "the fork fixture must really span two rollout files"
+        );
+
+        let exported = store_a
+            .export_thread_archive(crate::ExportThreadArchiveParams {
+                thread_id: child_id,
+                archive_source: false,
+            })
+            .await
+            .expect("export fork archive");
+
+        let store_b = LocalThreadStore::new(config_b, Some(runtime_b));
+        let imported = store_b
+            .import_thread_archive(crate::ImportThreadArchiveParams {
+                archive_path: exported.archive_path,
+            })
+            .await
+            .expect("import fork archive");
+        assert_eq!(imported.thread_id, child_id);
+        assert!(imported.rollout_path.starts_with(home_b.path()));
+
+        let target_lineage = store_b
+            .resolve_rollout_lineage(child_id, None)
+            .await
+            .expect("resolve restored lineage");
+        assert_eq!(target_lineage.segments.len(), 2);
+        for segment in &target_lineage.segments {
+            assert!(
+                segment.rollout_path.starts_with(home_b.path()),
+                "restored segment must live under home b: {}",
+                segment.rollout_path.display()
+            );
+            assert!(segment.rollout_path.exists());
+        }
+        let read = store_b
+            .read_thread(ReadThreadParams {
+                thread_id: child_id,
+                include_archived: false,
+                include_history: false,
+            })
+            .await
+            .expect("read restored fork by id in home b");
+        assert_eq!(read.thread_id, child_id);
+        assert_eq!(read.history_mode, ThreadHistoryMode::Paginated);
     }
 
     #[tokio::test]

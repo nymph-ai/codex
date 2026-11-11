@@ -4982,31 +4982,6 @@
       ],
       "type": "string"
     },
-    "ThreadImportSnapshotChunk": {
-      "properties": {
-        "isFinal": {
-          "description": "Whether this is the last chunk; adoption runs on the final chunk.",
-          "type": "boolean"
-        },
-        "lines": {
-          "description": "Verbatim rollout JSONL lines for this chunk.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "snapshotId": {
-          "description": "Caller-chosen staging identifier, unique per transfer (`[A-Za-z0-9_-]{1,64}`).",
-          "type": "string"
-        }
-      },
-      "required": [
-        "isFinal",
-        "lines",
-        "snapshotId"
-      ],
-      "type": "object"
-    },
     "ThreadInjectItemsParams": {
       "properties": {
         "items": {

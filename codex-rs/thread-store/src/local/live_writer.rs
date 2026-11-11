@@ -177,8 +177,8 @@ pub(super) async fn resume_thread(
 /// becomes discoverable by id (`thread/list`, `thread/read`) and the resumed
 /// writer appends to the store-owned copy. The source file is never mutated.
 /// Rollouts already under this home pass through unchanged. If the destination
-/// already exists with different content length, adoption refuses rather than
-/// guessing which lineage wins; resume by thread id in that case.
+/// already exists with different content (by digest, not length), adoption
+/// refuses rather than guessing which lineage wins; resume by thread id then.
 async fn adopt_foreign_rollout(
     store: &LocalThreadStore,
     thread_id: ThreadId,
@@ -251,12 +251,24 @@ async fn adopt_foreign_rollout(
             destination.join(file_name)
         }
     };
-    if let Ok(existing) = tokio::fs::metadata(&destination).await {
-        let source_len = tokio::fs::metadata(&rollout_path)
-            .await
-            .map_err(thread_store_io_error)?
-            .len();
-        if existing.len() != source_len {
+    if tokio::fs::metadata(&destination).await.is_ok() {
+        // Same length is not same content: only a digest match over the
+        // decompressed rollout proves the two files carry one lineage.
+        let existing_destination = destination.clone();
+        let source_path = rollout_path.clone();
+        let (existing_digest, source_digest) = tokio::task::spawn_blocking(move || {
+            (
+                super::transfer::content_hash(&existing_destination),
+                super::transfer::content_hash(&source_path),
+            )
+        })
+        .await
+        .map_err(|err| ThreadStoreError::Internal {
+            message: format!("failed to compare rollout contents: {err}"),
+        })?;
+        let existing_digest = existing_digest.map_err(thread_store_io_error)?;
+        let source_digest = source_digest.map_err(thread_store_io_error)?;
+        if existing_digest != source_digest {
             return Err(ThreadStoreError::InvalidRequest {
                 message: format!(
                     "thread {thread_id} already exists in this store at `{}` \

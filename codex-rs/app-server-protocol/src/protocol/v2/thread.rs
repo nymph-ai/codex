@@ -730,71 +730,58 @@ pub struct ThreadImportParams {
     /// adopt into this daemon's thread store. The source file is never
     /// mutated; future appends land in the store-owned copy. After import,
     /// resume the thread by id with `thread/resume`. Exactly one of `path`
-    /// or `snapshot` must be set.
+    /// or `archivePath` must be set.
     #[serde(default)]
     #[ts(optional = nullable)]
     pub path: Option<PathBuf>,
-    /// One chunk of a snapshot produced by `thread/snapshot` on the source
-    /// daemon, for daemons that cannot read the source rollout path (for
-    /// example across machines or pod filesystems).
+    /// Thread archive produced by `thread/export` on the source daemon,
+    /// for daemons that cannot read the source rollout path (for example
+    /// across machines or pod filesystems). The archive carries the
+    /// thread's full rollout lineage, goal, and attachments; the thread is
+    /// restored under its original id.
     #[serde(default)]
     #[ts(optional = nullable)]
-    pub snapshot: Option<ThreadImportSnapshotChunk>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ThreadImportSnapshotChunk {
-    /// Caller-chosen staging identifier, unique per transfer
-    /// (`[A-Za-z0-9_-]{1,64}`).
-    pub snapshot_id: String,
-    /// Verbatim rollout JSONL lines for this chunk.
-    pub lines: Vec<String>,
-    /// Whether this is the last chunk; adoption runs on the final chunk.
-    pub is_final: bool,
+    pub archive_path: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadImportResponse {
-    /// Adopted thread; `null` while snapshot chunks are still staging.
-    #[ts(optional = nullable)]
-    pub thread: Option<Thread>,
-    /// Store-owned rollout path the thread was adopted into; `null` while
-    /// snapshot chunks are still staging.
-    #[ts(optional = nullable)]
-    pub path: Option<PathBuf>,
+    /// Thread adopted into this daemon's store.
+    pub thread: Thread,
+    /// Store-owned rollout path the thread was adopted into.
+    pub path: PathBuf,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ThreadSnapshotParams {
+pub struct ThreadExportParams {
     pub thread_id: String,
-    /// Opaque offset cursor from a previous response; omit for the first chunk.
+    /// Archive the source thread as part of the export, fencing it against
+    /// further resume on this daemon. This is the exact-move mode: after a
+    /// successful export and import elsewhere, exactly one daemon can
+    /// drive the thread. Without it the export is a plain snapshot and
+    /// the source stays resumable here.
     #[serde(default)]
-    #[ts(optional = nullable)]
-    pub cursor: Option<String>,
-    /// Maximum number of rollout lines to return (default and max are
-    /// server-chosen when omitted or out of range).
-    #[serde(default)]
-    #[ts(optional = nullable)]
-    pub limit: Option<u64>,
+    pub archive_source: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ThreadSnapshotResponse {
+pub struct ThreadExportResponse {
     pub thread_id: String,
-    /// Verbatim rollout JSONL lines in replay order. Feed them to
-    /// `thread/import` snapshot chunks on the receiving daemon.
-    pub lines: Vec<String>,
-    /// Cursor for the next chunk; `null` at end of rollout.
-    #[ts(optional = nullable)]
-    pub next_cursor: Option<String>,
+    /// Daemon-owned archive file on this host. Move it to the receiving
+    /// daemon's host and pass it to `thread/import` as `archivePath`.
+    pub archive_path: PathBuf,
+    /// Lowercase hex SHA-256 of the archive file bytes.
+    pub sha256: String,
+    /// Archive file size in bytes.
+    pub byte_len: u64,
+    /// Whether the source thread is archived (fenced) after this export.
+    pub source_archived: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
