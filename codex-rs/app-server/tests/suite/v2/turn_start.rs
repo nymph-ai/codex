@@ -6034,6 +6034,20 @@ async fn a_role_with_allowed_tools_is_offered_only_them_and_parent_mail_reaches_
     })
     .await??;
 
+    let child_read = mcp
+        .send_raw_request("thread/read", Some(json!({"threadId": child_thread_id})))
+        .await?;
+    let child_read = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(child_read)),
+    )
+    .await??;
+    assert_eq!(
+        child_read.result["thread"]["agentRole"].as_str(),
+        Some("dual"),
+        "the spawned child's role: {}",
+        child_read.result["thread"]
+    );
     let first = timeout(DEFAULT_READ_TIMEOUT, async {
         loop {
             if let Some(request) = child_first.requests().into_iter().next() {
