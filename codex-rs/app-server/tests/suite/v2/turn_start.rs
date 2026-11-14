@@ -5948,7 +5948,7 @@ async fn a_role_with_allowed_tools_is_offered_only_them_and_parent_mail_reaches_
         "name = \"dual\"\n\
          description = \"A dual.\"\n\
          developer_instructions = \"Act only through the dataspace.\"\n\
-         allowed_tools = [{ name = \"update_plan\" }]\n",
+         allowed_tools = [{ name = \"view_image\" }]\n",
     )?;
     MockResponsesConfig::new(&server.uri())
         .enable_feature(Feature::MultiAgentV2)
@@ -6088,7 +6088,7 @@ async fn a_role_with_allowed_tools_is_offered_only_them_and_parent_mail_reaches_
         .iter()
         .map(|tool| tool["name"].as_str().unwrap_or_default().to_string())
         .collect();
-    assert_eq!(offered, vec!["update_plan".to_string()]);
+    assert_eq!(offered, vec!["view_image".to_string()]);
 
     let to_parent = mcp
         .send_raw_request(
