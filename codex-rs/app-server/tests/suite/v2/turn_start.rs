@@ -5940,6 +5940,19 @@ async fn a_role_with_allowed_tools_is_offered_only_them_and_parent_mail_reaches_
         ]),
     )
     .await;
+    // The parent's turn goes on after the spawn returns, and ends normally.
+    let _parent_done = responses::mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            body_contains(req, SPAWN_CALL_ID) && body_contains(req, r#"\"agent_name\":\"/root\""#)
+        },
+        responses::sse(vec![
+            responses::ev_response_created("resp-parent-2"),
+            responses::ev_assistant_message("msg-parent-2", "the dual is watching"),
+            responses::ev_completed("resp-parent-2"),
+        ]),
+    )
+    .await;
     let codex_home = TempDir::new()?;
     // Discovered from CODEX_HOME/agents, as a node installs it.
     std::fs::create_dir_all(codex_home.path().join("agents"))?;
