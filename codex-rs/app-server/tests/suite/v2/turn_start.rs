@@ -6057,18 +6057,33 @@ async fn a_role_with_allowed_tools_is_offered_only_them_and_parent_mail_reaches_
         }
     })
     .await?;
-    assert!(
-        first
-            .to_string()
-            .contains("Act only through the dataspace."),
-        "the dual role was not applied to this request: thread {} instructions {}",
-        first["client_metadata"]["thread_id"],
-        first["instructions"]
-            .to_string()
-            .chars()
-            .take(400)
-            .collect::<String>(),
-    );
+    if !first
+        .to_string()
+        .contains("Act only through the dataspace.")
+    {
+        let spawn_outputs: Vec<String> = server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|req| serde_json::from_slice::<serde_json::Value>(&req.body).ok())
+            .flat_map(|body| body["input"].as_array().cloned().unwrap_or_default())
+            .filter(|item| {
+                item["call_id"] == SPAWN_CALL_ID && item["type"] == "function_call_output"
+            })
+            .map(|item| item["output"].to_string())
+            .collect();
+        let developer: Vec<String> = first["input"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|item| item["role"] == "developer")
+            .map(|item| item.to_string().chars().take(300).collect())
+            .collect();
+        panic!(
+            "the dual role was not applied: spawn said {spawn_outputs:?}; child developer input {developer:?}"
+        );
+    }
     let offered: Vec<String> = first["tools"]
         .as_array()
         .context("the child's request offers tools")?
