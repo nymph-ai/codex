@@ -5967,7 +5967,8 @@ async fn a_role_with_allowed_tools_is_offered_only_them_and_parent_mail_reaches_
         })
         .await?;
     // A fresh child's history never holds the parent's prompt; the parent's always does.
-    let is_child = |req: &wiremock::Request| !body_contains(req, PARENT_PROMPT);
+    // As upstream's role tests do: the child's requests name it as /root/dual.
+    let is_child = |req: &wiremock::Request| body_contains(req, r#"\"agent_name\":\"/root/dual\""#);
     let child_first = responses::mount_sse_once_match(
         &server,
         {
