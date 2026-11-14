@@ -1907,19 +1907,19 @@ impl ThreadManager {
                 "Empty message can't be sent to an agent".to_string(),
             ));
         }
-        let resume_config = self
-            .get_thread(parent)
-            .await?
-            .config()
-            .await
-            .as_ref()
-            .clone();
+        // The parent session's own agent control owns its children; a fresh one does not
+        // know them.
+        let parent_thread = self.get_thread(parent).await?;
+        let resume_config = parent_thread.config().await.as_ref().clone();
         let mode = if trigger_turn {
             crate::MessageDeliveryMode::TriggerTurn
         } else {
             crate::MessageDeliveryMode::QueueOnly
         };
-        self.agent_control()
+        parent_thread
+            .session
+            .services
+            .agent_control
             .send(crate::SendRequest {
                 caller: parent,
                 target: crate::AgentTarget::Id(target),
