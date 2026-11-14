@@ -1503,6 +1503,11 @@ impl MessageProcessor {
                 .add(params)
                 .await
                 .map(|response| Some(response.into())),
+            ClientRequest::ThreadAgentMessageSend { params, .. } => self
+                .thread_queue_processor
+                .agent_message_send(params)
+                .await
+                .map(|response| Some(response.into())),
             ClientRequest::ThreadQueueList { params, .. } => self
                 .thread_queue_processor
                 .list(params)

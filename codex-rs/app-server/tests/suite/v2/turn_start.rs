@@ -5907,3 +5907,176 @@ fn write_test_skill(codex_home: &Path, name: &str) -> std::io::Result<()> {
         format!("---\nname: {name}\ndescription: {name} description\n---\n\n# Body\n"),
     )
 }
+
+/// A role that names its tools is offered exactly those, and `thread/agentMessage/send`
+/// reaches the multi-agent v2 sub-agent that refuses direct input, as its parent's mail.
+#[tokio::test]
+async fn a_role_with_allowed_tools_is_offered_only_them_and_parent_mail_reaches_it() -> Result<()> {
+    const PARENT_PROMPT: &str = "spawn a dual and continue";
+    const CHILD_PROMPT: &str = "dual: watch the dataspace";
+    const MAIL: &str = "fabric mail: the condition changed";
+    const SPAWN_CALL_ID: &str = "spawn-call-dual";
+
+    let server = responses::start_mock_server().await;
+    let spawn_args = serde_json::to_string(&json!({
+        "message": CHILD_PROMPT,
+        "task_name": "dual",
+        "agent_type": "dual",
+    }))?;
+    let _parent_turn = responses::mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            body_contains(req, PARENT_PROMPT) && !body_contains(req, CHILD_PROMPT)
+        },
+        responses::sse(vec![
+            responses::ev_response_created("resp-parent-1"),
+            responses::ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "spawn_agent",
+                &spawn_args,
+            ),
+            responses::ev_completed("resp-parent-1"),
+        ]),
+    )
+    .await;
+    let child_first = responses::mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, CHILD_PROMPT) && !body_contains(req, MAIL),
+        responses::sse(vec![
+            responses::ev_response_created("resp-child-1"),
+            responses::ev_assistant_message("msg-child-1", "watching"),
+            responses::ev_completed("resp-child-1"),
+        ]),
+    )
+    .await;
+    let child_mail = responses::mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, MAIL),
+        responses::sse(vec![
+            responses::ev_response_created("resp-child-2"),
+            responses::ev_assistant_message("msg-child-2", "seen"),
+            responses::ev_completed("resp-child-2"),
+        ]),
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    let role_file = codex_home.path().join("dual.toml");
+    std::fs::write(
+        &role_file,
+        "developer_instructions = \"Act only through the dataspace.\"\n\
+         allowed_tools = [{ name = \"update_plan\" }]\n",
+    )?;
+    MockResponsesConfig::new(&server.uri())
+        .enable_feature(Feature::MultiAgentV2)
+        .with_root_config(&format!(
+            "chatgpt_base_url = \"{}\"\n[agents.dual]\ndescription = \"A dual.\"\nconfig_file = {:?}\n",
+            server.uri(),
+            role_file.display().to_string(),
+        ))
+        .write(codex_home.path())?;
+    write_models_cache(codex_home.path()).await?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let ThreadStartResponse { thread, .. } = mcp
+        .start_thread(ThreadStartParams {
+            model: Some("gpt-5.4".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let _: TurnStartResponse = mcp
+        .request(|request_id| ClientRequest::TurnStart {
+            request_id,
+            params: TurnStartParams {
+                thread_id: thread.id.clone(),
+                input: vec![V2UserInput::Text {
+                    text: PARENT_PROMPT.to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    let child_thread_id = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let completed: ItemCompletedNotification =
+                mcp.read_notification("item/completed").await?;
+            if let ThreadItemPayload::SubAgentActivity {
+                id,
+                kind: SubAgentActivityKind::Started,
+                agent_thread_id,
+                ..
+            } = completed.item.payload
+                && id == SPAWN_CALL_ID
+            {
+                return Ok::<String, anyhow::Error>(agent_thread_id);
+            }
+        }
+    })
+    .await??;
+
+    let first = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            if let Some(request) = child_first.requests().into_iter().next() {
+                return request.body_json();
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await?;
+    let offered: Vec<String> = first["tools"]
+        .as_array()
+        .context("the child's request offers tools")?
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(offered, vec!["update_plan".to_string()]);
+
+    let to_parent = mcp
+        .send_raw_request(
+            "thread/agentMessage/send",
+            Some(json!({"threadId": thread.id, "message": MAIL, "triggerTurn": true})),
+        )
+        .await?;
+    let refused: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(to_parent)),
+    )
+    .await??;
+    assert_eq!(refused.error.code, INVALID_REQUEST_ERROR_CODE);
+    assert!(refused.error.message.contains("is not a spawned sub-agent"));
+
+    let to_child = mcp
+        .send_raw_request(
+            "thread/agentMessage/send",
+            Some(json!({"threadId": child_thread_id, "message": MAIL, "triggerTurn": true})),
+        )
+        .await?;
+    let accepted = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(to_child)),
+    )
+    .await??;
+    assert!(accepted.result["submissionId"].as_str().is_some());
+
+    let mailed = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            if let Some(request) = child_mail.requests().into_iter().next() {
+                return request.body_json();
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await?;
+    assert_eq!(
+        mailed["client_metadata"]["thread_id"].as_str(),
+        Some(child_thread_id.as_str())
+    );
+
+    Ok(())
+}

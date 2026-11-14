@@ -209,10 +209,20 @@ async fn agent_role_config_from_toml(
         role.nickname_candidates.as_deref(),
     )?;
 
+    let allowed_tools = match &config_file {
+        Some(path) => {
+            read_resolved_agent_role_file(fs, path, Some(role_name))
+                .await?
+                .allowed_tools
+        }
+        None => None,
+    };
+
     Ok(AgentRoleConfig {
         description,
         config_file: config_file.map(AbsolutePathBuf::into_path_buf),
         nickname_candidates,
+        allowed_tools,
     })
 }
 
@@ -327,6 +337,7 @@ async fn discover_agent_roles_in_dir(
                 description: parsed_file.description,
                 config_file: Some(agent_file.to_path_buf()),
                 nickname_candidates: parsed_file.nickname_candidates,
+                allowed_tools: parsed_file.allowed_tools,
             },
         );
     }

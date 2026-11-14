@@ -681,6 +681,12 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadQueueAddResponse,
     },
+    #[experimental("thread/agentMessage/send")]
+    ThreadAgentMessageSend => "thread/agentMessage/send" {
+        params: v2::ThreadAgentMessageSendParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadAgentMessageSendResponse,
+    },
     #[experimental("thread/queue/list")]
     ThreadQueueList => "thread/queue/list" {
         params: v2::ThreadQueueListParams,
