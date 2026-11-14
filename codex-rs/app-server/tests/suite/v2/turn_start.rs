@@ -6043,6 +6043,18 @@ async fn a_role_with_allowed_tools_is_offered_only_them_and_parent_mail_reaches_
         }
     })
     .await?;
+    assert!(
+        first
+            .to_string()
+            .contains("Act only through the dataspace."),
+        "the dual role was not applied to this request: thread {} instructions {}",
+        first["client_metadata"]["thread_id"],
+        first["instructions"]
+            .to_string()
+            .chars()
+            .take(400)
+            .collect::<String>(),
+    );
     let offered: Vec<String> = first["tools"]
         .as_array()
         .context("the child's request offers tools")?
