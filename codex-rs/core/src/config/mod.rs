@@ -1009,6 +1009,10 @@ pub struct Config {
     /// User-defined role declarations keyed by role name.
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
 
+    /// The tools a thread with the applied role is offered, when the role names them
+    /// (`allowed_tools` in its role file). Set only by applying a role; never read from TOML.
+    pub role_allowed_tools: Option<Vec<codex_protocol::ToolName>>,
+
     /// Maximum token budget allowed for a goal and default budget for new goals.
     pub max_goal_token_budget: Option<i64>,
 
@@ -4709,6 +4713,7 @@ impl Config {
             agent_default_subagent_reasoning_effort,
             agent_max_depth,
             agent_roles,
+            role_allowed_tools: None,
             max_goal_token_budget: cfg
                 .goals
                 .as_ref()

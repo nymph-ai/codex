@@ -1024,6 +1024,27 @@ pub struct ThreadQueueAddResponse {
     pub queued_submission: QueuedSubmission,
 }
 
+/// Agent mail for a loaded spawned sub-agent, delivered as its spawn parent's message.
+/// Multi-agent v2 refuses direct client input to such a thread; this is the parent's path.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadAgentMessageSendParams {
+    pub thread_id: String,
+    pub message: String,
+    /// True starts (or steers) a turn, as `followup_task` does; false queues the mail,
+    /// as `send_message` does.
+    pub trigger_turn: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadAgentMessageSendResponse {
+    /// Acceptance identifier; not evidence that the sub-agent read the message.
+    pub submission_id: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

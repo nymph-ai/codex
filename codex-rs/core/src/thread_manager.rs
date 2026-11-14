@@ -1889,6 +1889,50 @@ impl ThreadManager {
         Box::pin(self.state.spawn_thread(request)).await
     }
 
+    /// Delivers agent mail to a spawned sub-agent as if its spawn parent sent it with
+    /// `send_message` (`trigger_turn` false) or `followup_task` (true). Multi-agent v2 refuses
+    /// direct client input to such a thread because its parent owns its input; this keeps that
+    /// ownership, so the message is attributed to the parent and takes the parent's path, which
+    /// reloads an unloaded child as the parent's own message would. The caller names the parent
+    /// it read from the child's session source; the parent must be loaded.
+    pub async fn send_agent_message_as_parent(
+        &self,
+        parent: ThreadId,
+        target: ThreadId,
+        content: String,
+        trigger_turn: bool,
+    ) -> CodexResult<crate::DeliveryReceipt> {
+        if content.trim().is_empty() {
+            return Err(CodexErr::InvalidRequest(
+                "Empty message can't be sent to an agent".to_string(),
+            ));
+        }
+        // The parent session's own agent control owns its children; a fresh one does not
+        // know them.
+        let parent_thread = self.get_thread(parent).await?;
+        let resume_config = parent_thread.config().await.as_ref().clone();
+        let mode = if trigger_turn {
+            crate::MessageDeliveryMode::TriggerTurn
+        } else {
+            crate::MessageDeliveryMode::QueueOnly
+        };
+        parent_thread
+            .session
+            .services
+            .agent_control
+            .send(crate::SendRequest {
+                caller: parent,
+                target: crate::AgentTarget::Id(target),
+                resume_config,
+                input: crate::AgentInput::Message {
+                    message: crate::AgentMessage::Plaintext(content),
+                    mode,
+                },
+                start_options: Default::default(),
+            })
+            .await
+    }
+
     pub(crate) fn agent_control(&self) -> LocalAgentControl {
         LocalAgentControl::new(
             Arc::downgrade(&self.state),

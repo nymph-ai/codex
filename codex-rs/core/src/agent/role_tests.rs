@@ -98,6 +98,7 @@ async fn apply_role_returns_unavailable_for_missing_user_role_file() {
             description: None,
             config_file: Some(PathBuf::from("/path/does/not/exist.toml")),
             nickname_candidates: None,
+            allowed_tools: None,
         },
     );
 
@@ -121,6 +122,7 @@ async fn apply_role_rejects_symlinked_role_file() {
             description: None,
             config_file: Some(role_path),
             nickname_candidates: None,
+            allowed_tools: None,
         },
     );
 
@@ -141,6 +143,7 @@ async fn apply_role_returns_unavailable_for_invalid_user_role_toml() {
             description: None,
             config_file: Some(role_path),
             nickname_candidates: None,
+            allowed_tools: None,
         },
     );
 
@@ -172,6 +175,7 @@ model = "role-model"
             description: None,
             config_file: Some(role_path),
             nickname_candidates: None,
+            allowed_tools: None,
         },
     );
 
@@ -202,6 +206,7 @@ async fn apply_role_preserves_unspecified_keys() {
             description: None,
             config_file: Some(role_path),
             nickname_candidates: None,
+            allowed_tools: None,
         },
     );
 
@@ -303,6 +308,7 @@ async fn apply_role_refreshes_model_instructions_only_when_personality_opt_out_c
                 description: None,
                 config_file: Some(role_path),
                 nickname_candidates: None,
+                allowed_tools: None,
             },
         );
         config.base_instructions = Some("inherited instructions".to_string());
@@ -344,6 +350,7 @@ service_tier = "priority"
             description: None,
             config_file: Some(role_path),
             nickname_candidates: None,
+            allowed_tools: None,
         },
     );
 
@@ -374,6 +381,7 @@ async fn apply_role_preserves_existing_service_tier_without_override() {
             description: None,
             config_file: Some(role_path),
             nickname_candidates: None,
+            allowed_tools: None,
         },
     );
 
@@ -417,6 +425,7 @@ writable_roots = ["./sandbox-root"]
             description: None,
             config_file: Some(role_path),
             nickname_candidates: None,
+            allowed_tools: None,
         },
     );
     let parent_permissions = config.permissions.clone();
@@ -496,6 +505,7 @@ command = "attacker-command"
             description: None,
             config_file: Some(role_path),
             nickname_candidates: None,
+            allowed_tools: None,
         },
     );
     let parent = config.clone();
@@ -620,6 +630,7 @@ async fn apply_role_takes_precedence_over_existing_session_flags_for_same_key() 
             description: None,
             config_file: Some(role_path),
             nickname_candidates: None,
+            allowed_tools: None,
         },
     );
 
@@ -663,6 +674,7 @@ enabled = false
             description: None,
             config_file: Some(role_path),
             nickname_candidates: None,
+            allowed_tools: None,
         },
     );
 
@@ -711,6 +723,7 @@ fn spawn_tool_spec_build_deduplicates_user_defined_built_in_roles() {
                 description: Some("user override".to_string()),
                 config_file: None,
                 nickname_candidates: None,
+                allowed_tools: None,
             },
         ),
         ("researcher".to_string(), AgentRoleConfig::default()),
@@ -732,6 +745,7 @@ fn spawn_tool_spec_lists_user_defined_roles_before_built_ins() {
             description: Some("first".to_string()),
             config_file: None,
             nickname_candidates: None,
+            allowed_tools: None,
         },
     )]);
 
@@ -759,6 +773,7 @@ fn spawn_tool_spec_marks_role_locked_model_and_reasoning_effort() {
             description: Some("Research carefully.".to_string()),
             config_file: Some(role_path),
             nickname_candidates: None,
+            allowed_tools: None,
         },
     )]);
 
@@ -784,6 +799,7 @@ fn spawn_tool_spec_marks_role_locked_reasoning_effort_only() {
             description: Some("Review carefully.".to_string()),
             config_file: Some(role_path),
             nickname_candidates: None,
+            allowed_tools: None,
         },
     )]);
 
@@ -809,6 +825,7 @@ fn spawn_tool_spec_omits_role_service_tier() {
             description: Some("Stay fast.".to_string()),
             config_file: Some(role_path),
             nickname_candidates: None,
+            allowed_tools: None,
         },
     )]);
 
@@ -822,5 +839,117 @@ fn built_in_config_file_contents_resolves_explorer_only() {
     assert_eq!(
         built_in::config_file_contents(Path::new("missing.toml")),
         None
+    );
+}
+
+#[test]
+fn a_role_file_names_its_tools_and_they_leave_the_config_layer() {
+    let resolved = codex_agent_roles::parse_agent_role_file_contents(
+        r#"
+name = "dual"
+description = "Acts only through the dataspace."
+developer_instructions = "Use act."
+allowed_tools = [
+    { namespace = "mcp__dssam__", name = "act" },
+    { name = "update_plan" },
+]
+"#,
+        std::path::Path::new("dual.toml"),
+        &std::env::temp_dir(),
+        None,
+    )
+    .expect("the role file parses");
+
+    assert_eq!(
+        resolved.allowed_tools,
+        Some(vec![
+            codex_protocol::ToolName::namespaced("mcp__dssam__", "act"),
+            codex_protocol::ToolName::plain("update_plan"),
+        ])
+    );
+    assert!(
+        resolved.config.get("allowed_tools").is_none(),
+        "allowed_tools is the role's, not a config key"
+    );
+
+    let plain = codex_agent_roles::parse_agent_role_file_contents(
+        "name = \"plain\"\ndeveloper_instructions = \"x\"\n",
+        std::path::Path::new("plain.toml"),
+        &std::env::temp_dir(),
+        None,
+    )
+    .expect("the role file parses");
+    assert_eq!(plain.allowed_tools, None);
+}
+
+#[tokio::test]
+async fn apply_role_carries_its_allowed_tools_onto_the_config() {
+    let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+    let role_path = write_role_config(
+        &home,
+        "dual.toml",
+        "developer_instructions = \"Use act.\"\n",
+    )
+    .await;
+    let allowed = vec![codex_protocol::ToolName::namespaced("mcp__dssam__", "act")];
+    config.agent_roles.insert(
+        "dual".to_string(),
+        AgentRoleConfig {
+            description: None,
+            config_file: Some(role_path),
+            nickname_candidates: None,
+            allowed_tools: Some(allowed.clone()),
+        },
+    );
+    assert_eq!(config.role_allowed_tools, None);
+
+    apply_role_to_config(&mut config, Some("dual"))
+        .await
+        .expect("dual role should apply");
+    assert_eq!(config.role_allowed_tools, Some(allowed));
+
+    apply_role_to_config(&mut config, /*role_name*/ None)
+        .await
+        .expect("default role should apply");
+    assert_eq!(config.role_allowed_tools, None);
+}
+
+#[tokio::test]
+async fn a_discovered_role_file_brings_its_tools_and_instructions() {
+    let home = TempDir::new().expect("create temp dir");
+    fs::create_dir_all(home.path().join("agents")).expect("agents dir");
+    fs::write(
+        home.path().join("agents").join("dual.toml"),
+        "name = \"dual\"\n\
+         description = \"A dual.\"\n\
+         developer_instructions = \"Act only through the dataspace.\"\n\
+         allowed_tools = [{ name = \"update_plan\" }]\n",
+    )
+    .expect("write role file");
+    let mut config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .fallback_cwd(Some(home.path().to_path_buf()))
+        .build()
+        .await
+        .expect("load config");
+    let role = config
+        .agent_roles
+        .get("dual")
+        .unwrap_or_else(|| panic!("dual not discovered: {:?}", config.agent_roles.keys()));
+    assert_eq!(
+        role.allowed_tools,
+        Some(vec![codex_protocol::ToolName::plain("update_plan")])
+    );
+
+    apply_role_to_config(&mut config, Some("dual"))
+        .await
+        .expect("dual role should apply");
+    assert_eq!(
+        config.developer_instructions.as_deref(),
+        Some("Act only through the dataspace.")
+    );
+    assert_eq!(
+        config.role_allowed_tools,
+        Some(vec![codex_protocol::ToolName::plain("update_plan")])
     );
 }

@@ -1998,6 +1998,7 @@ version = "0.0.0"
 dependencies = [
  "codex-config",
  "codex-file-system",
+ "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-path-uri",
  "serde",

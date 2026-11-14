@@ -1,4 +1,5 @@
 use codex_config::config_toml::ConfigToml;
+use codex_protocol::ToolName;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::Deserialize;
 use std::collections::BTreeSet;
@@ -15,6 +16,9 @@ pub struct AgentRoleConfig {
     pub config_file: Option<PathBuf>,
     /// Candidate nicknames for agents spawned with this role.
     pub nickname_candidates: Option<Vec<String>>,
+    /// When set, the only tools a thread with this role is offered (its tool policy).
+    /// A role can only narrow the tool surface this way; it cannot add a tool.
+    pub allowed_tools: Option<Vec<ToolName>>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
@@ -23,6 +27,7 @@ struct RawAgentRoleFileToml {
     name: Option<String>,
     description: Option<String>,
     nickname_candidates: Option<Vec<String>>,
+    allowed_tools: Option<Vec<ToolName>>,
     #[serde(flatten)]
     config: ConfigToml,
 }
@@ -32,6 +37,7 @@ pub struct ResolvedAgentRoleFile {
     pub role_name: String,
     pub description: Option<String>,
     pub nickname_candidates: Option<Vec<String>>,
+    pub allowed_tools: Option<Vec<ToolName>>,
     pub config: TomlValue,
 }
 
@@ -108,11 +114,13 @@ pub fn parse_agent_role_file_contents(
     config_table.remove("name");
     config_table.remove("description");
     config_table.remove("nickname_candidates");
+    config_table.remove("allowed_tools");
 
     Ok(ResolvedAgentRoleFile {
         role_name,
         description,
         nickname_candidates,
+        allowed_tools: parsed.allowed_tools,
         config,
     })
 }

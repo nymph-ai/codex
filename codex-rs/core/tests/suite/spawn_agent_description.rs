@@ -432,6 +432,7 @@ async fn configured_agent_roles_control_spawn_agent_type(
                         description: Some("Research role".to_string()),
                         config_file: None,
                         nickname_candidates: None,
+                        allowed_tools: None,
                     },
                 );
             }

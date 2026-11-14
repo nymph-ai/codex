@@ -69,6 +69,7 @@ async fn apply_role_to_config_inner(
     role: &AgentRoleConfig,
 ) -> anyhow::Result<()> {
     let is_built_in = !config.agent_roles.contains_key(role_name);
+    config.role_allowed_tools = role.allowed_tools.clone();
     let Some(config_file) = role.config_file.as_ref() else {
         return Ok(());
     };
@@ -325,6 +326,7 @@ mod built_in {
                         description: Some("Default agent.".to_string()),
                         config_file: None,
                         nickname_candidates: None,
+                        allowed_tools: None,
                     }
                 ),
                 (
@@ -339,6 +341,7 @@ Rules:
 - Reuse existing explorers for related questions."#.to_string()),
                         config_file: Some("explorer.toml".to_string().parse().unwrap_or_default()),
                         nickname_candidates: None,
+                        allowed_tools: None,
                     }
                 ),
                 (
@@ -354,6 +357,7 @@ Rules:
 - Always tell workers they are **not alone in the codebase**, and they should not revert the edits made by others, and they should adjust their implementation to accommodate the changes made by others. This is important because there may be multiple workers making changes in parallel, and they need to be aware of each other's work to avoid conflicts and ensure a cohesive final product."#.to_string()),
                         config_file: None,
                         nickname_candidates: None,
+                        allowed_tools: None,
                     }
                 ),
                 // Awaiter is temp removed

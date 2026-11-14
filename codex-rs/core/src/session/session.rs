@@ -1163,6 +1163,12 @@ impl Session {
                 // Older reviewer rollouts predate the explicit startup policy.
                 if crate::guardian::is_basic_session_source(&session_configuration.session_source) {
                     Arc::new(codex_guardian_reviewer::reviewer_tool_policy())
+                } else if let Some(allowed_tools) = config.role_allowed_tools.clone() {
+                    // A role that names its tools is offered exactly those, on spawn and resume.
+                    Arc::new(codex_extension_api::ToolPolicy {
+                        allowed_tools: Some(allowed_tools),
+                        ..Default::default()
+                    })
                 } else {
                     Arc::default()
                 }

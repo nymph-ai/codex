@@ -7,6 +7,8 @@ use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::QueuedSubmission;
+use codex_app_server_protocol::ThreadAgentMessageSendParams;
+use codex_app_server_protocol::ThreadAgentMessageSendResponse;
 use codex_app_server_protocol::ThreadQueueAddParams;
 use codex_app_server_protocol::ThreadQueueAddResponse;
 use codex_app_server_protocol::ThreadQueueDeleteParams;
@@ -92,6 +94,36 @@ impl ThreadQueueRequestProcessor {
             .map_err(queue_error)?;
         Ok(ThreadQueueAddResponse {
             queued_submission: api_queued_submission(queued_item)?,
+        })
+    }
+
+    /// Agent mail into a loaded spawned sub-agent, as its spawn parent's message. This is
+    /// the one client path into a multi-agent v2 sub-agent, which refuses direct input.
+    pub(crate) async fn agent_message_send(
+        &self,
+        params: ThreadAgentMessageSendParams,
+    ) -> Result<ThreadAgentMessageSendResponse, JSONRPCErrorError> {
+        let (thread_id, _, source) = self.require_thread(&params.thread_id).await?;
+        let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        }) = source
+        else {
+            return Err(invalid_request(format!(
+                "thread {thread_id} is not a spawned sub-agent"
+            )));
+        };
+        let receipt = self
+            .thread_manager
+            .send_agent_message_as_parent(
+                parent_thread_id,
+                thread_id,
+                params.message,
+                params.trigger_turn,
+            )
+            .await
+            .map_err(|error| invalid_request(error.to_string()))?;
+        Ok(ThreadAgentMessageSendResponse {
+            submission_id: receipt.submission_id,
         })
     }
 
