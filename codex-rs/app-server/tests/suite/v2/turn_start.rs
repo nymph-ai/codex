@@ -5940,27 +5940,6 @@ async fn a_role_with_allowed_tools_is_offered_only_them_and_parent_mail_reaches_
         ]),
     )
     .await;
-    let child_first = responses::mount_sse_once_match(
-        &server,
-        |req: &wiremock::Request| body_contains(req, CHILD_PROMPT) && !body_contains(req, MAIL),
-        responses::sse(vec![
-            responses::ev_response_created("resp-child-1"),
-            responses::ev_assistant_message("msg-child-1", "watching"),
-            responses::ev_completed("resp-child-1"),
-        ]),
-    )
-    .await;
-    let child_mail = responses::mount_sse_once_match(
-        &server,
-        |req: &wiremock::Request| body_contains(req, MAIL),
-        responses::sse(vec![
-            responses::ev_response_created("resp-child-2"),
-            responses::ev_assistant_message("msg-child-2", "seen"),
-            responses::ev_completed("resp-child-2"),
-        ]),
-    )
-    .await;
-
     let codex_home = TempDir::new()?;
     // Discovered from CODEX_HOME/agents, as a node installs it.
     std::fs::create_dir_all(codex_home.path().join("agents"))?;
@@ -5987,6 +5966,42 @@ async fn a_role_with_allowed_tools_is_offered_only_them_and_parent_mail_reaches_
             ..Default::default()
         })
         .await?;
+    // The child's requests are those of any thread but the parent's.
+    let parent_id = thread.id.clone();
+    let is_child = move |req: &wiremock::Request| {
+        serde_json::from_slice::<serde_json::Value>(&req.body)
+            .ok()
+            .and_then(|body| {
+                body["client_metadata"]["thread_id"]
+                    .as_str()
+                    .map(str::to_owned)
+            })
+            .is_some_and(|thread| thread != parent_id)
+    };
+    let child_first = responses::mount_sse_once_match(
+        &server,
+        {
+            let is_child = is_child.clone();
+            move |req: &wiremock::Request| is_child(req) && !body_contains(req, MAIL)
+        },
+        responses::sse(vec![
+            responses::ev_response_created("resp-child-1"),
+            responses::ev_assistant_message("msg-child-1", "watching"),
+            responses::ev_completed("resp-child-1"),
+        ]),
+    )
+    .await;
+    let child_mail = responses::mount_sse_once_match(
+        &server,
+        move |req: &wiremock::Request| is_child(req) && body_contains(req, MAIL),
+        responses::sse(vec![
+            responses::ev_response_created("resp-child-2"),
+            responses::ev_assistant_message("msg-child-2", "seen"),
+            responses::ev_completed("resp-child-2"),
+        ]),
+    )
+    .await;
+
     let _: TurnStartResponse = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
