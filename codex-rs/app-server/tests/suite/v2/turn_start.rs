@@ -5966,23 +5966,15 @@ async fn a_role_with_allowed_tools_is_offered_only_them_and_parent_mail_reaches_
             ..Default::default()
         })
         .await?;
-    // The child's requests are those of any thread but the parent's.
-    let parent_id = thread.id.clone();
-    let is_child = move |req: &wiremock::Request| {
-        serde_json::from_slice::<serde_json::Value>(&req.body)
-            .ok()
-            .and_then(|body| {
-                body["client_metadata"]["thread_id"]
-                    .as_str()
-                    .map(str::to_owned)
-            })
-            .is_some_and(|thread| thread != parent_id)
-    };
+    // A fresh child's history never holds the parent's prompt; the parent's always does.
+    let is_child = |req: &wiremock::Request| !body_contains(req, PARENT_PROMPT);
     let child_first = responses::mount_sse_once_match(
         &server,
         {
             let is_child = is_child.clone();
-            move |req: &wiremock::Request| is_child(req) && !body_contains(req, MAIL)
+            move |req: &wiremock::Request| {
+                is_child(req) && body_contains(req, CHILD_PROMPT) && !body_contains(req, MAIL)
+            }
         },
         responses::sse(vec![
             responses::ev_response_created("resp-child-1"),
