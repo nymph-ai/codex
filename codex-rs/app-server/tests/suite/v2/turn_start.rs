@@ -5962,19 +5962,18 @@ async fn a_role_with_allowed_tools_is_offered_only_them_and_parent_mail_reaches_
     .await;
 
     let codex_home = TempDir::new()?;
-    let role_file = codex_home.path().join("dual.toml");
+    // Discovered from CODEX_HOME/agents, as a node installs it.
+    std::fs::create_dir_all(codex_home.path().join("agents"))?;
     std::fs::write(
-        &role_file,
-        "developer_instructions = \"Act only through the dataspace.\"\n\
+        codex_home.path().join("agents").join("dual.toml"),
+        "name = \"dual\"\n\
+         description = \"A dual.\"\n\
+         developer_instructions = \"Act only through the dataspace.\"\n\
          allowed_tools = [{ name = \"update_plan\" }]\n",
     )?;
     MockResponsesConfig::new(&server.uri())
         .enable_feature(Feature::MultiAgentV2)
-        .with_root_config(&format!(
-            "chatgpt_base_url = \"{}\"\n[agents.dual]\ndescription = \"A dual.\"\nconfig_file = {:?}\n",
-            server.uri(),
-            role_file.display().to_string(),
-        ))
+        .with_root_config(&format!("chatgpt_base_url = \"{}\"", server.uri()))
         .write(codex_home.path())?;
     write_models_cache(codex_home.path()).await?;
 
