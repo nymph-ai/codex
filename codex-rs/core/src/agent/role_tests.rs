@@ -841,3 +841,43 @@ fn built_in_config_file_contents_resolves_explorer_only() {
         None
     );
 }
+
+#[test]
+fn a_role_file_names_its_tools_and_they_leave_the_config_layer() {
+    let resolved = codex_agent_roles::parse_agent_role_file_contents(
+        r#"
+name = "dual"
+description = "Acts only through the dataspace."
+developer_instructions = "Use act."
+allowed_tools = [
+    { namespace = "mcp__dssam__", name = "act" },
+    { name = "update_plan" },
+]
+"#,
+        std::path::Path::new("dual.toml"),
+        &std::env::temp_dir(),
+        None,
+    )
+    .expect("the role file parses");
+
+    assert_eq!(
+        resolved.allowed_tools,
+        Some(vec![
+            codex_protocol::ToolName::namespaced("mcp__dssam__", "act"),
+            codex_protocol::ToolName::plain("update_plan"),
+        ])
+    );
+    assert!(
+        resolved.config.get("allowed_tools").is_none(),
+        "allowed_tools is the role's, not a config key"
+    );
+
+    let plain = codex_agent_roles::parse_agent_role_file_contents(
+        "name = \"plain\"\ndeveloper_instructions = \"x\"\n",
+        std::path::Path::new("plain.toml"),
+        &std::env::temp_dir(),
+        None,
+    )
+    .expect("the role file parses");
+    assert_eq!(plain.allowed_tools, None);
+}
