@@ -881,3 +881,35 @@ allowed_tools = [
     .expect("the role file parses");
     assert_eq!(plain.allowed_tools, None);
 }
+
+#[tokio::test]
+async fn apply_role_carries_its_allowed_tools_onto_the_config() {
+    let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+    let role_path = write_role_config(
+        &home,
+        "dual.toml",
+        "developer_instructions = \"Use act.\"\n",
+    )
+    .await;
+    let allowed = vec![codex_protocol::ToolName::namespaced("mcp__dssam__", "act")];
+    config.agent_roles.insert(
+        "dual".to_string(),
+        AgentRoleConfig {
+            description: None,
+            config_file: Some(role_path),
+            nickname_candidates: None,
+            allowed_tools: Some(allowed.clone()),
+        },
+    );
+    assert_eq!(config.role_allowed_tools, None);
+
+    apply_role_to_config(&mut config, Some("dual"))
+        .await
+        .expect("dual role should apply");
+    assert_eq!(config.role_allowed_tools, Some(allowed));
+
+    apply_role_to_config(&mut config, /*role_name*/ None)
+        .await
+        .expect("default role should apply");
+    assert_eq!(config.role_allowed_tools, None);
+}

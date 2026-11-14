@@ -69,6 +69,7 @@ async fn apply_role_to_config_inner(
     role: &AgentRoleConfig,
 ) -> anyhow::Result<()> {
     let is_built_in = !config.agent_roles.contains_key(role_name);
+    config.role_allowed_tools = role.allowed_tools.clone();
     let Some(config_file) = role.config_file.as_ref() else {
         return Ok(());
     };
