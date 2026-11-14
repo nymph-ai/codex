@@ -913,3 +913,43 @@ async fn apply_role_carries_its_allowed_tools_onto_the_config() {
         .expect("default role should apply");
     assert_eq!(config.role_allowed_tools, None);
 }
+
+#[tokio::test]
+async fn a_discovered_role_file_brings_its_tools_and_instructions() {
+    let home = TempDir::new().expect("create temp dir");
+    fs::create_dir_all(home.path().join("agents")).expect("agents dir");
+    fs::write(
+        home.path().join("agents").join("dual.toml"),
+        "name = \"dual\"\n\
+         description = \"A dual.\"\n\
+         developer_instructions = \"Act only through the dataspace.\"\n\
+         allowed_tools = [{ name = \"update_plan\" }]\n",
+    )
+    .expect("write role file");
+    let mut config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .fallback_cwd(Some(home.path().to_path_buf()))
+        .build()
+        .await
+        .expect("load config");
+    let role = config
+        .agent_roles
+        .get("dual")
+        .unwrap_or_else(|| panic!("dual not discovered: {:?}", config.agent_roles.keys()));
+    assert_eq!(
+        role.allowed_tools,
+        Some(vec![codex_protocol::ToolName::plain("update_plan")])
+    );
+
+    apply_role_to_config(&mut config, Some("dual"))
+        .await
+        .expect("dual role should apply");
+    assert_eq!(
+        config.developer_instructions.as_deref(),
+        Some("Act only through the dataspace.")
+    );
+    assert_eq!(
+        config.role_allowed_tools,
+        Some(vec![codex_protocol::ToolName::plain("update_plan")])
+    );
+}
