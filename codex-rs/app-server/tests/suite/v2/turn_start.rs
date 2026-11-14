@@ -6043,7 +6043,12 @@ async fn a_role_with_allowed_tools_is_offered_only_them_and_parent_mail_reaches_
     );
     let first = timeout(DEFAULT_READ_TIMEOUT, async {
         loop {
-            if let Some(request) = child_first.requests().into_iter().next() {
+            // The child's own request carries its task as agent mail.
+            if let Some(request) = child_first
+                .requests()
+                .into_iter()
+                .find(|request| !request.inputs_of_type("agent_message").is_empty())
+            {
                 return request.body_json();
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
