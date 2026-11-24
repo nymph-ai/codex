@@ -326,7 +326,7 @@ impl Session {
                 cfg!(windows)
                     && settings.effective_local_windows_sandbox_type() == SandboxType::WindowsMxc,
             );
-        let mut mcp_servers = effective_mcp_servers(config, auth);
+        let mut mcp_servers = codex_mcp::effective_mcp_servers(config, auth);
         let thread_id = self.thread_id().to_string();
         for server in mcp_servers.values_mut() {
             server.bind_local_stdio_thread(&thread_id, &config.codex_home);
