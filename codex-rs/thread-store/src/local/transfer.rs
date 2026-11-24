@@ -573,7 +573,7 @@ async fn lineage_sources(
 
 struct ColdLocks {
     _lifecycle: Vec<tokio::sync::OwnedRwLockWriteGuard<()>>,
-    _writer: Vec<tokio::sync::OwnedMutexGuard<()>>,
+    _writer: Vec<tokio::sync::OwnedMutexGuard<u64>>,
     _file_locks: Vec<std::sync::Arc<codex_rollout::WriterLockGuard>>,
 }
 

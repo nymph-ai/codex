@@ -52,6 +52,7 @@ impl OAuthRuntime {
         let credentials = match self {
             Self::Legacy(persistor) => persistor.stored_credentials().await,
             Self::Coordinated { store, .. } => store.stored_credentials().await,
+            Self::DaemonLease { .. } => None,
         };
         credentials.map(|tokens| tokens.token_response.0.access_token().secret().to_string())
     }
@@ -210,6 +211,28 @@ impl OAuthRuntime {
                 Arc::clone(self.authorization_manager()).lock_owned().await,
                 None,
             ),
+            Self::DaemonLease { auth_manager, .. } => {
+                let refresh = match operation {
+                    AccessTokenOperation::Get => self.refresh_if_needed().await,
+                    AccessTokenOperation::Refresh {
+                        rejected_access_token,
+                    } => {
+                        let (_, credentials) = auth_manager.lock().await.get_credentials().await?;
+                        if credentials.as_ref().is_some_and(|tokens| {
+                            tokens.access_token().secret() != &rejected_access_token
+                        }) {
+                            self.refresh_if_needed().await
+                        } else {
+                            self.force_refresh().await
+                        }
+                    }
+                };
+                refresh.map_err(|_| AuthError::AuthorizationRequired)?;
+                let (_, credentials) = auth_manager.lock().await.get_credentials().await?;
+                return credentials
+                    .map(|tokens| tokens.access_token().secret().to_string())
+                    .ok_or(AuthError::AuthorizationRequired);
+            }
         };
         let runtime = self.clone();
         let access_token = async move {
@@ -232,6 +255,7 @@ impl OAuthRuntime {
                                     .await
                             }
                             Self::Legacy(_) => manager.get_access_token().await,
+                            Self::DaemonLease { .. } => Err(AuthError::AuthorizationRequired),
                         }
                     } else {
                         manager
@@ -274,7 +298,9 @@ impl OAuthRuntime {
     fn authorization_manager(&self) -> &Arc<Mutex<AuthorizationManager>> {
         match self {
             Self::Legacy(persistor) => &persistor.inner.authorization_manager,
-            Self::Coordinated { auth_manager, .. } => auth_manager,
+            Self::Coordinated { auth_manager, .. } | Self::DaemonLease { auth_manager, .. } => {
+                auth_manager
+            }
         }
     }
 }
