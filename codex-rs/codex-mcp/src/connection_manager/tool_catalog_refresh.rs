@@ -9,7 +9,7 @@ use tokio::time::Instant;
 use tracing::warn;
 
 use super::McpConnectionSet;
-use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use crate::McpServerKey;
 use crate::rmcp_client::list_tools_for_client_uncached;
 
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -29,7 +29,7 @@ impl McpConnectionSet {
         clippy::await_holding_invalid_type,
         reason = "catalog publication is serialized with captured tool calls"
     )]
-    pub(super) async fn refresh_notified_tool_catalogs(&self) -> HashMap<String, Option<u64>> {
+    pub(super) async fn refresh_notified_tool_catalogs(&self) -> HashMap<McpServerKey, Option<u64>> {
         let mut generations = HashMap::new();
         let mut states = self.tool_catalog_refresh.lock().await;
         for (server_name, view) in &self.servers {
@@ -37,7 +37,7 @@ impl McpConnectionSet {
             // (`refresh_codex_apps_client_catalog`), which applies the apps
             // permission filter. Driving it from a bare tool list here would
             // bypass that, so notifications for it are left to upstream.
-            if server_name == CODEX_APPS_MCP_SERVER_NAME {
+            if view.connection.client.is_codex_apps_mcp_server {
                 continue;
             }
             let Some(transport) = view.connection.client.ready_transport() else {
@@ -67,16 +67,17 @@ impl McpConnectionSet {
                 // revision are rejected and no parallel override map exists.
                 client
                     .tool_catalog
-                    .refresh_notified(&client.client.tool_list_revision(), || {
-                        list_tools_for_client_uncached(
-                            server_name,
+                    .refresh_notified(&client.client.tool_list_revision(), || async {
+                        let relist = list_tools_for_client_uncached(
+                            server_name.name(),
                             /*is_codex_apps_mcp_server*/ false,
                             "notification",
                             &client.client,
                             Some(timeout),
                             view.catalog_item_limit,
                             client.server_instructions.as_deref(),
-                        )
+                        );
+                        client.with_active_shared_lease(relist).await?
                     })
                     .await?;
                 Ok::<(), anyhow::Error>(())
@@ -95,7 +96,7 @@ impl McpConnectionSet {
                     // this server unavailable until a complete fetch succeeds;
                     // retry later even without another notification.
                     state.retry_at = Some(Instant::now() + RETRY_DELAY);
-                    warn!(server_name, ?result, "MCP tool catalog refresh failed");
+                    warn!(server_name = %server_name, ?result, "MCP tool catalog refresh failed");
                 }
             }
         }
