@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use codex_config::types::McpServerTransportConfig;
+use codex_extension_api::McpServerContributionContext;
 use codex_mcp::McpRuntimeContext;
 use codex_rmcp_client::StreamableHttpRedirectMode;
 use tokio::task::JoinHandle;
@@ -85,14 +86,21 @@ async fn refresh_expiring_tokens(
 ) -> anyhow::Result<()> {
     let config = config_manager.load_latest_config(None).await?;
     let auth = auth_manager.auth().await;
-    let mcp_config = thread_manager.mcp_manager().runtime_config(&config).await;
+    let mcp_config = thread_manager
+        .mcp_manager()
+        .runtime_config(McpServerContributionContext::global(&config))
+        .await;
     let runtime_context = McpRuntimeContext::new(
         thread_manager.environment_manager(),
         config.cwd.to_path_buf(),
     );
     let effective_servers = codex_mcp::effective_mcp_servers(&mcp_config, auth.as_ref());
 
-    for (name, server) in effective_servers {
+    for (key, server) in effective_servers {
+        if key.scoped_environment_id().is_some() {
+            continue;
+        }
+        let name = key.name();
         let redirect_mode = if server.is_agent_plugin() {
             StreamableHttpRedirectMode::AgentPluginV1
         } else {
@@ -109,7 +117,7 @@ async fn refresh_expiring_tokens(
             _ => continue,
         };
 
-        let oauth_credential_name = server_cfg.oauth_credential_name(&name);
+        let oauth_credential_name = server_cfg.oauth_credential_name(name);
         let Ok(Some(snapshot)) = codex_rmcp_client::stored_oauth_credential_snapshot(
             oauth_credential_name.as_ref(),
             &url,
@@ -128,7 +136,7 @@ async fn refresh_expiring_tokens(
             continue;
         }
 
-        let Ok(http_client) = runtime_context.resolve_http_client(&name, server_cfg) else {
+        let Ok(http_client) = runtime_context.resolve_http_client(name, server_cfg) else {
             continue;
         };
         let Ok(default_headers) =

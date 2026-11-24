@@ -870,7 +870,7 @@ impl ThreadRequestProcessor {
             stored_thread,
             self.config.model_provider_id.as_str(),
             &self.config.cwd,
-        );
+        )?;
         Ok(Some(
             ThreadImportResponse {
                 thread,
