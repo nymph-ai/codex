@@ -413,14 +413,17 @@ async fn http_notice_during_list_is_not_acknowledged_by_that_list() {
     ));
     config.mcp_server_catalog = catalog.build();
     let key = config.mcp_server_catalog.resolve_server_key("fabric", None);
-    let client = server.client("fabric").await;
-    let transport = client.ready_transport().unwrap();
-    manager.insert_test_client_with_key(key.clone(), client);
+    manager.insert_test_client_with_key(key.clone(), server.client("fabric").await);
     manager.tool_plugin_context = Arc::new(crate::tool_plugin_context(&config));
     let manager = Arc::new(manager);
     let before = capture_binding(&manager).await;
     let expected = before.tools().to_vec();
     assert_eq!(expected[0].plugin_display_names, vec!["Fabric".to_string()]);
+    let transport = manager.servers[&key]
+        .connection
+        .client
+        .ready_transport()
+        .unwrap();
     server.notify_during_list.store(true, Ordering::Release);
     transport
         .call_tool(
