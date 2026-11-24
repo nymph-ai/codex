@@ -101,10 +101,10 @@ pub(crate) use self::resolved_store::resolve_oauth_tokens_from_store_policy;
 pub(crate) use self::resolved_store::try_resolve_oauth_tokens_from_store_policy;
 pub mod daemon_lease;
 pub(crate) use self::runtime::OAuthRuntime;
+pub(crate) use self::transport::OAuthStreamableHttpClient;
 pub use daemon_lease::lease_access_token_from_daemon;
 pub use daemon_lease::lease_access_token_from_socket;
 pub use daemon_lease::resolve_daemon_control_socket_path;
-pub(crate) use self::transport::OAuthStreamableHttpClient;
 
 const KEYRING_SERVICE: &str = "Codex MCP Credentials";
 const MCP_OAUTH_SECRET_PREFIX: &str = "MCP_OAUTH";

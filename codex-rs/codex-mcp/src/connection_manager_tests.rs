@@ -6438,7 +6438,13 @@ async fn reconciliation_reuses_connection_without_relisting_regular_tools() -> a
         .expect("refresh must use the reconciled timeout");
     // Withdraw the previous catalog when a notified server's refresh fails.
     assert!(failed.tools().is_empty());
-    assert!(failed.list_all_resources(|_| true).await.by_server.is_empty());
+    assert!(
+        failed
+            .list_all_resources(|_| true)
+            .await
+            .by_server
+            .is_empty()
+    );
     assert!(
         failed
             .list_all_resource_templates(|_| true)
