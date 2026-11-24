@@ -481,7 +481,9 @@ impl CodexErr {
     pub fn retry_delay(&self, retry_count: u64) -> Option<Duration> {
         match self.retry_policy() {
             RetryPolicy::Never => None,
-            RetryPolicy::ServerDirected if matches!(self.details(), CodexErrorDetails::ServerOverloaded) => {
+            RetryPolicy::ServerDirected
+                if matches!(self.details(), CodexErrorDetails::ServerOverloaded) =>
+            {
                 Some(self.server_retry_delay().unwrap_or_else(|| {
                     backoff(retry_count.min(6))
                         .saturating_mul(10)

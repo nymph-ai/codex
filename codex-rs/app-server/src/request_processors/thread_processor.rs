@@ -1368,7 +1368,9 @@ impl ThreadRequestProcessor {
         } else {
             let overrides = ConfigOverrides {
                 cwd: Some(cwd.to_path_buf()),
-                workspace_roots: runtime_workspace_roots.map(native_runtime_workspace_roots).transpose()?,
+                workspace_roots: runtime_workspace_roots
+                    .map(native_runtime_workspace_roots)
+                    .transpose()?,
                 model_provider,
                 codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
                 ..Default::default()
@@ -5065,8 +5067,9 @@ impl ThreadRequestProcessor {
         let history_cwd = history_settings
             .map(|settings| settings.cwd.to_path_buf())
             .or_else(|| thread_history.session_cwd());
-        let mut runtime_workspace_roots =
-            runtime_workspace_roots.map(native_runtime_workspace_roots).transpose()?;
+        let mut runtime_workspace_roots = runtime_workspace_roots
+            .map(native_runtime_workspace_roots)
+            .transpose()?;
         if runtime_workspace_roots.is_none() {
             // A retained owned snapshot is authoritative. Only use startup metadata when
             // no such snapshot exists; missing roots do not resurrect an older selection.

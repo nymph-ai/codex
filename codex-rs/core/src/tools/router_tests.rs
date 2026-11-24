@@ -813,11 +813,12 @@ async fn advertised_native_search_function_alias_dispatches() -> anyhow::Result<
         ("other_search", "tool_search_tool"),
         ("tool_search", "other_tool"),
     ] {
-        let call = router.build_tool_call(serde_json::from_value(json!({
-            "type": "function_call", "call_id": "wrong-namespace", "namespace": namespace,
-            "name": name, "arguments": "{\"query\":\"lookup\"}",
-        }))?)?
-        .expect("function call");
+        let call = router
+            .build_tool_call(serde_json::from_value(json!({
+                "type": "function_call", "call_id": "wrong-namespace", "namespace": namespace,
+                "name": name, "arguments": "{\"query\":\"lookup\"}",
+            }))?)?
+            .expect("function call");
         assert!(
             router
                 .dispatch_tool_call_with_code_mode_result(
@@ -855,11 +856,12 @@ async fn native_search_alias_does_not_enable_disabled_search() -> anyhow::Result
             .registered_tool(&ToolName::plain("tool_search"))
             .is_none()
     );
-    let call = router.build_tool_call(serde_json::from_value(json!({
-        "type": "function_call", "call_id": "disabled-search", "namespace": "tool_search",
-        "name": "tool_search_tool", "arguments": "{\"query\":\"lookup\"}",
-    }))?)?
-    .expect("function call");
+    let call = router
+        .build_tool_call(serde_json::from_value(json!({
+            "type": "function_call", "call_id": "disabled-search", "namespace": "tool_search",
+            "name": "tool_search_tool", "arguments": "{\"query\":\"lookup\"}",
+        }))?)?
+        .expect("function call");
     let result = router
         .dispatch_tool_call_with_code_mode_result(
             Arc::new(session),

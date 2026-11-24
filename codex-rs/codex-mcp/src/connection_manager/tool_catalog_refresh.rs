@@ -29,7 +29,9 @@ impl McpConnectionSet {
         clippy::await_holding_invalid_type,
         reason = "catalog publication is serialized with captured tool calls"
     )]
-    pub(super) async fn refresh_notified_tool_catalogs(&self) -> HashMap<McpServerKey, Option<u64>> {
+    pub(super) async fn refresh_notified_tool_catalogs(
+        &self,
+    ) -> HashMap<McpServerKey, Option<u64>> {
         let mut generations = HashMap::new();
         let mut states = self.tool_catalog_refresh.lock().await;
         for (server_name, view) in &self.servers {
