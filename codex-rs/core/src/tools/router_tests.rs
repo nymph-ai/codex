@@ -791,7 +791,7 @@ async fn advertised_native_search_function_alias_dispatches() -> anyhow::Result<
             Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())), call, ToolCallSource::Direct,
         ).await;
         assert!(result.is_ok(), "advertised discovery form {index} rejected: {:?}", result.err());
-        let output = result?.into_response().item;
+        let output = result?.into_response(/*file_backed_tool_audio*/ false).item;
         match (index, output) {
             (0, ResponseItem::ToolSearchOutput { call_id, tools, .. }) => {
                 assert_eq!(call_id.as_deref(), Some("native"));

@@ -436,18 +436,18 @@ async fn overload_advice_survives_keep_open_sse_in_both_event_forms() {
             for event in error_forms(detail) {
                 let error = map_api_error(keep_open_error(event).await);
                 assert_eq!(error.to_codex_protocol_error(), expected);
-                assert_eq!(error.retry_delay(/*retry_count*/ 1), delay, "{code}");
+                assert_eq!(error.server_retry_delay(), delay, "{code}");
             }
         }
         let event = json!({"type": "error", "headers": {"Retry-After": "9"}, "error": {"code": code, "headers": {"Retry-After": "3"}}});
         assert_eq!(
-            map_api_error(keep_open_error(event).await).retry_delay(/*retry_count*/ 1),
+            map_api_error(keep_open_error(event).await).server_retry_delay(),
             Some(Duration::from_secs(3))
         );
         let event =
             json!({"type": "error", "headers": {"Retry-After": "9"}, "error": {"code": code}});
         assert_eq!(
-            map_api_error(keep_open_error(event).await).retry_delay(/*retry_count*/ 1),
+            map_api_error(keep_open_error(event).await).server_retry_delay(),
             Some(Duration::from_secs(9))
         );
     }
