@@ -118,14 +118,15 @@ impl McpRequestProcessor {
         let mcp_config = self
             .thread_manager
             .mcp_manager()
-            .runtime_config(&config)
+            .runtime_config(McpServerContributionContext::global(&config))
             .await;
         let runtime_context = McpRuntimeContext::new(
             self.thread_manager.environment_manager(),
             config.cwd.to_path_buf(),
         );
         let effective_servers = codex_mcp::effective_mcp_servers(&mcp_config, auth.as_ref());
-        let Some(server) = effective_servers.get(&params.server_name) else {
+        let server_key = McpServerKey::unscoped(params.server_name.as_str());
+        let Some(server) = effective_servers.get(&server_key) else {
             return Err(invalid_request(format!(
                 "No MCP server named '{}' found.",
                 params.server_name

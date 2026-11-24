@@ -1272,12 +1272,21 @@ pub(super) async fn handle_pending_thread_resume_request(
                 .await
             {
                 Ok((snapshot, selected_service_tier, changed)) => {
-                    apply_live_thread_settings(&mut thread, &snapshot);
+                    apply_live_thread_settings(&mut thread, conversation, &snapshot);
                     if changed {
                         let mut selected = snapshot.clone();
                         selected.service_tier = selected_service_tier;
                         let settings =
-                            super::thread_summary::thread_settings_from_config_snapshot(&selected);
+                            match super::thread_summary::thread_settings_from_config_snapshot(
+                                &selected,
+                            ) {
+                                Ok(settings) => settings,
+                                Err(error) => {
+                                    drop(pending_thread_unloads);
+                                    outgoing.send_error(request_id, error).await;
+                                    return;
+                                }
+                            };
                         thread_state
                             .lock()
                             .await
