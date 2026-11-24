@@ -142,9 +142,12 @@ impl McpConnectionSet {
         name: impl Into<String>,
         client: AsyncManagedClient,
     ) {
-        let name = name.into();
+        self.insert_test_client_with_key(McpServerKey::unscoped(name), client);
+    }
+
+    fn insert_test_client_with_key(&mut self, key: McpServerKey, client: AsyncManagedClient) {
         self.servers.insert(
-            McpServerKey::unscoped(name.clone()),
+            key.clone(),
             McpServerView {
                 refresh_tool_list: true,
                 refresh_timeout: DEFAULT_STARTUP_TIMEOUT,
@@ -161,8 +164,8 @@ impl McpConnectionSet {
                     _diagnostics_guard: LIVE_CONNECTIONS.track(),
                 }),
                 metadata: McpServerMetadata {
-                    environment_id: String::new(),
-                    server_key: McpServerKey::unscoped(name),
+                    environment_id: key.scoped_environment_id().unwrap_or_default().to_owned(),
+                    server_key: key,
                     pollutes_memory: true,
                     origin: None,
                     supports_parallel_tool_calls: false,

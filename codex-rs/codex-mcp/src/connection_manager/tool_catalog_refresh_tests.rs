@@ -9,7 +9,7 @@ use tokio::sync::RwLock;
 /// it is now a map keyed by server, and upstream's own tests treat it as a
 /// readiness signal rather than an ordinal. Ask about fabric, which is the only
 /// server these fixtures refresh.
-async fn fabric_catalog_revision(manager: &McpConnectionSet) -> Option<u64> {
+async fn fabric_catalog_revision(manager: &McpConnectionSet, key: &McpServerKey) -> Option<u64> {
     manager
         .stable_catalog_revisions(
             /*required_servers*/ &[],
@@ -17,12 +17,10 @@ async fn fabric_catalog_revision(manager: &McpConnectionSet) -> Option<u64> {
         )
         .await
         .and_then(|revisions| {
-            revisions
-                .get(&McpServerKey::unscoped("fabric"))
-                .map(|revision| match revision {
-                    BindingCatalogRevision::Ready(revision) => revision.revision,
-                    BindingCatalogRevision::Cached(revision) => *revision,
-                })
+            revisions.get(key).map(|revision| match revision {
+                BindingCatalogRevision::Ready(revision) => revision.revision,
+                BindingCatalogRevision::Cached(revision) => *revision,
+            })
         })
 }
 
@@ -233,6 +231,7 @@ impl CatalogHttpServer {
 
 #[tokio::test]
 async fn http_notifications_refresh_model_bindings_and_preserve_server_scope() {
+    let key = McpServerKey::unscoped("fabric");
     let old = create_test_tool("fabric", "old").tool;
     let same = create_test_tool("fabric", "same").tool;
     let server = CatalogHttpServer::start(vec![old, same.clone()]).await;
@@ -242,7 +241,7 @@ async fn http_notifications_refresh_model_bindings_and_preserve_server_scope() {
     manager.insert_test_client("other", other.client("other").await);
     manager
         .servers
-        .get_mut(&McpServerKey::unscoped("fabric"))
+        .get_mut(&key)
         .unwrap()
         .tool_filter
         .disabled
@@ -280,33 +279,15 @@ async fn http_notifications_refresh_model_bindings_and_preserve_server_scope() {
     .await
     .unwrap();
     assert!(
-        fabric_catalog_revision(&manager)
+        fabric_catalog_revision(&manager, &key)
             .await
             .is_some_and(|revision| revision >= 1)
     );
     let (after, concurrent) = tokio::join!(capture_binding(&manager), manager.list_all_tools());
-    assert_eq!(
-        after
-            .tool_info(&McpServerKey::unscoped("fabric"), "same")
-            .unwrap()
-            .tool,
-        changed
-    );
-    assert!(
-        after
-            .prepare_call(&McpServerKey::unscoped("fabric"), "added")
-            .is_some()
-    );
-    assert!(
-        after
-            .prepare_call(&McpServerKey::unscoped("fabric"), "old")
-            .is_none()
-    );
-    assert!(
-        after
-            .prepare_call(&McpServerKey::unscoped("fabric"), "blocked")
-            .is_none()
-    );
+    assert_eq!(after.tool_info(&key, "same").unwrap().tool, changed);
+    assert!(after.prepare_call(&key, "added").is_some());
+    assert!(after.prepare_call(&key, "old").is_none());
+    assert!(after.prepare_call(&key, "blocked").is_none());
     assert!(
         concurrent
             .iter()
@@ -319,7 +300,7 @@ async fn http_notifications_refresh_model_bindings_and_preserve_server_scope() {
     assert_eq!(other.initializes.load(Ordering::SeqCst), 1);
     assert!(
         before
-            .prepare_call(&McpServerKey::unscoped("fabric"), "old")
+            .prepare_call(&key, "old")
             .unwrap()
             .call_with_preparation(
                 /*requested_timeout*/ None,
@@ -370,7 +351,7 @@ async fn http_notifications_refresh_model_bindings_and_preserve_server_scope() {
     assert_eq!(server.lists.load(Ordering::SeqCst), 3);
     assert!(
         after
-            .prepare_call(&McpServerKey::unscoped("fabric"), "same")
+            .prepare_call(&key, "same")
             .unwrap()
             .call_with_preparation(
                 /*requested_timeout*/ None,
@@ -384,11 +365,7 @@ async fn http_notifications_refresh_model_bindings_and_preserve_server_scope() {
     server.fail_lists.store(false, Ordering::Release);
     tokio::time::sleep(Duration::from_millis(1100)).await;
     let recovered = capture_binding(&manager).await;
-    assert!(
-        recovered
-            .prepare_call(&McpServerKey::unscoped("fabric"), "recovered")
-            .is_some()
-    );
+    assert!(recovered.prepare_call(&key, "recovered").is_some());
     assert_eq!(server.lists.load(Ordering::SeqCst), 4);
 
     // Identical descriptors still advance the captured generation, so the
@@ -410,7 +387,7 @@ async fn http_notifications_refresh_model_bindings_and_preserve_server_scope() {
     .await
     .unwrap();
     assert!(
-        fabric_catalog_revision(&manager)
+        fabric_catalog_revision(&manager, &key)
             .await
             .is_some_and(|revision| revision >= 1)
     );
@@ -426,7 +403,6 @@ async fn http_notifications_refresh_model_bindings_and_preserve_server_scope() {
 async fn http_notice_during_list_is_not_acknowledged_by_that_list() {
     let server = CatalogHttpServer::start(vec![create_test_tool("fabric", "same").tool]).await;
     let mut manager = McpConnectionSet::empty(/*prefix_mcp_tool_names*/ true);
-    manager.insert_test_client("fabric", server.client("fabric").await);
     let mut config = crate::mcp::tests::test_mcp_config(std::env::temp_dir());
     let mut catalog = crate::ResolvedMcpCatalog::builder();
     catalog.register(crate::McpServerRegistration::from_plugin(
@@ -436,12 +412,15 @@ async fn http_notice_during_list_is_not_acknowledged_by_that_list() {
         serde_json::from_value(json!({"url": server.url})).unwrap(),
     ));
     config.mcp_server_catalog = catalog.build();
+    let key = config.mcp_server_catalog.resolve_server_key("fabric", None);
+    let client = server.client("fabric").await;
+    let transport = client.ready_transport().unwrap();
+    manager.insert_test_client_with_key(key.clone(), client);
     manager.tool_plugin_context = Arc::new(crate::tool_plugin_context(&config));
     let manager = Arc::new(manager);
     let before = capture_binding(&manager).await;
     let expected = before.tools().to_vec();
     assert_eq!(expected[0].plugin_display_names, vec!["Fabric".to_string()]);
-    let transport = manager.test_client("fabric").ready_transport().unwrap();
     server.notify_during_list.store(true, Ordering::Release);
     transport
         .call_tool(
@@ -473,7 +452,7 @@ async fn http_notice_during_list_is_not_acknowledged_by_that_list() {
     .await
     .unwrap();
     assert!(
-        fabric_catalog_revision(&manager)
+        fabric_catalog_revision(&manager, &key)
             .await
             .is_some_and(|revision| revision >= 1)
     );
