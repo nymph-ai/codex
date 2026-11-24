@@ -695,6 +695,15 @@ pub enum ModeKind {
     Default,
 }
 
+/// Ordered selections supported by the retained warm-resume setup path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(tag = "option", content = "value", rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ThreadResumeSetupOption {
+    CollaborationMode(ModeKind),
+    ReasoningEffort(ReasoningEffort),
+}
+
 pub const TUI_VISIBLE_COLLABORATION_MODES: [ModeKind; 2] = [ModeKind::Default, ModeKind::Plan];
 
 impl ModeKind {

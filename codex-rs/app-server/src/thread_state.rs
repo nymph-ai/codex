@@ -48,6 +48,12 @@ type PendingInterruptQueue = Vec<(String, ConnectionRequestId)>;
 // listener attachment only after that unload finishes cleanup.
 pub(crate) type PendingThreadUnloads = Arc<Mutex<HashMap<ThreadId, watch::Sender<()>>>>;
 
+pub(crate) struct PendingResumeSetup {
+    pub(crate) options: Vec<codex_protocol::config_types::ThreadResumeSetupOption>,
+    pub(crate) client_name: Option<String>,
+    pub(crate) client_version: Option<String>,
+}
+
 pub(crate) struct PendingThreadResumeRequest {
     pub(crate) request_id: ConnectionRequestId,
     pub(crate) history_items: Vec<RolloutItem>,
@@ -67,6 +73,7 @@ pub(crate) struct PendingThreadResumeRequest {
         Option<codex_app_server_protocol::TurnsPage>,
     pub(crate) resume_cursor_store: Option<Arc<dyn codex_thread_store::ThreadStore>>,
     pub(crate) redact_resume_payloads: bool,
+    pub(crate) setup: Option<PendingResumeSetup>,
 }
 
 // ThreadListenerCommand is used to perform operations in the context of the thread listener, for serialization purposes.
@@ -839,6 +846,14 @@ impl ThreadStateManager {
             entry.has_connections_watcher.subscribe(),
             attached,
         )))
+    }
+
+    pub(crate) async fn has_live_connection(&self, connection_id: ConnectionId) -> bool {
+        self.state
+            .lock()
+            .await
+            .live_connections
+            .contains_key(&connection_id)
     }
 
     pub(crate) async fn try_add_connection_to_thread(

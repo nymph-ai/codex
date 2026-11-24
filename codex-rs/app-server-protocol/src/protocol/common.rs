@@ -946,6 +946,18 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadReadResponse,
     },
+    #[experimental("thread/settings/read")]
+    ThreadSettingsRead => "thread/settings/read" {
+        params: v2::ThreadSettingsReadParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadSettingsReadResponse,
+    },
+    #[experimental("thread/setup/settings/read")]
+    ThreadSetupSettingsRead => "thread/setup/settings/read" {
+        params: v2::ThreadSetupSettingsReadParams,
+        serialization: optional_thread_id(params.thread_id),
+        response: v2::ThreadSetupSettingsReadResponse,
+    },
     #[experimental("thread/readState/update")]
     ThreadReadStateUpdate => "thread/readState/update" {
         params: v2::ThreadReadStateUpdateParams,
@@ -3460,6 +3472,7 @@ mod tests {
                 sandbox: v2::SandboxPolicy::DangerFullAccess,
                 active_permission_profile: None,
                 reasoning_effort: None,
+                collaboration_mode: None,
                 multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
             },
         };

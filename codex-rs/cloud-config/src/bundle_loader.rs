@@ -154,6 +154,7 @@ pub fn chatgpt_config_bundle_loader(
     codex_home: PathBuf,
     http_client_factory: HttpClientFactory,
 ) -> CloudConfigBundleLoader {
+    let preview_auth = Arc::clone(&auth_manager);
     let service = CloudConfigBundleService::new(
         auth_manager,
         Arc::new(BackendBundleClient::new(
@@ -164,7 +165,11 @@ pub fn chatgpt_config_bundle_loader(
         CLOUD_CONFIG_BUNDLE_TIMEOUT,
     );
     let (loader, _) = managed_config_bundle_loader_for_service(service);
-    loader
+    loader.with_unmanaged_preview_check(move || {
+        // External auth can resolve a new identity in auth(), and a backend account can
+        // refresh its token and policy. The ordinary source cannot fetch a bundle otherwise.
+        !preview_auth.has_external_auth() && !preview_auth.current_auth_uses_codex_backend()
+    })
 }
 
 pub(crate) fn managed_config_bundle_loader_for_service<C>(

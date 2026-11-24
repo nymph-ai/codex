@@ -141,6 +141,36 @@ impl ConfigManager {
         self
     }
 
+    /// Load through the normal config builder with detached application policy state.
+    /// External sources may refresh credentials or publish state and cannot be queried here.
+    pub(crate) fn read_only_preview(&self) -> std::io::Result<Self> {
+        let managed_config = self
+            .cloud_config_bundle
+            .read()
+            .map_err(|_| std::io::Error::other("managed configuration lock is unavailable"))?;
+        if !managed_config.can_preview_without_fetch()
+            || !self.thread_config_loader.supports_read_only_preview()
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "read-only setup discovery is unavailable with externally loaded configuration",
+            ));
+        }
+        let manager = Self::new(
+            self.codex_home.clone(),
+            self.current_cli_overrides(),
+            self.loader_overrides.clone(),
+            self.strict_config,
+            CloudConfigBundleLoader::default(),
+            self.arg0_paths.clone(),
+            Arc::clone(&self.thread_config_loader),
+        );
+        manager
+            .extend_runtime_feature_enablement(self.current_runtime_feature_enablement())
+            .map_err(|()| std::io::Error::other("could not capture runtime feature settings"))?;
+        Ok(manager)
+    }
+
     pub(crate) fn codex_home(&self) -> &Path {
         self.codex_home.as_path()
     }

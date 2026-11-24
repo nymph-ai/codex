@@ -84,6 +84,11 @@ impl ThreadConfigLoadError {
 /// are responsible for resolving the returned sources into the effective
 /// runtime config.
 pub trait ThreadConfigLoader: Send + Sync {
+    /// Whether the ordinary load can run during read-only option discovery.
+    fn supports_read_only_preview(&self) -> bool {
+        false
+    }
+
     /// Load source-specific typed config.
     ///
     /// Implementations should keep this method focused on fetching and parsing
@@ -126,6 +131,10 @@ impl StaticThreadConfigLoader {
 }
 
 impl ThreadConfigLoader for StaticThreadConfigLoader {
+    fn supports_read_only_preview(&self) -> bool {
+        true
+    }
+
     fn load(
         &self,
         _context: ThreadConfigContext,
@@ -139,6 +148,10 @@ impl ThreadConfigLoader for StaticThreadConfigLoader {
 pub struct NoopThreadConfigLoader;
 
 impl ThreadConfigLoader for NoopThreadConfigLoader {
+    fn supports_read_only_preview(&self) -> bool {
+        true
+    }
+
     fn load(
         &self,
         _context: ThreadConfigContext,

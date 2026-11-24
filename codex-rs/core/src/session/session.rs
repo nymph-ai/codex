@@ -803,6 +803,7 @@ impl Session {
         startup: Option<Arc<super::startup::SessionStartup>>,
         mut session_configuration: SessionConfiguration,
         attached_thread: bool,
+        persist_initial_setup: bool,
         prompt_cache_key: PromptCacheKey,
         environment_selections: &[TurnEnvironmentSelection],
         config: Arc<Config>,
@@ -1317,6 +1318,23 @@ impl Session {
             .map(|policy| codex_history::MessageRetention { thread_id, policy });
         // Keep the large initialization future out of callers' stack frames.
         let session_result: anyhow::Result<Arc<Self>> = Box::pin(async {
+            let persist_resumed_setup =
+                persist_initial_setup && matches!(&initial_history, InitialHistory::Resumed(_));
+            if persist_resumed_setup
+                && let InitialHistory::Resumed(resumed) = &initial_history
+                && !resume_context
+                    .as_ref()
+                    .is_some_and(|owned| Arc::ptr_eq(owned, &resumed.history))
+            {
+                // The local store preserves the same Arc only after verifying the history
+                // revision under exclusive writer ownership. Never commit effective settings
+                // prepared from an older view if the store reopened a newer revision.
+                return Err(CodexErr::InvalidRequest(
+                    "native history changed while preparing initialSettings; retry cold resume"
+                        .into(),
+                )
+                .into());
+            }
             if let InitialHistory::Resumed(resumed) = &mut initial_history {
                 if let Some(history) = resume_context {
                     resumed.history = history;
@@ -2106,6 +2124,14 @@ impl Session {
                 let mut guard = network_policy_decider_session.write().await;
                 *guard = Arc::downgrade(&sess);
             }
+            let persist_retained_setup = persist_resumed_setup
+                || (persist_initial_setup && matches!(&initial_history, InitialHistory::Forked(_)));
+            if persist_initial_setup && !persist_retained_setup {
+                // This thread has no turn yet. Materialize the chosen setup before
+                // opening the session, so a client can recover it even without prompting.
+                sess.try_ensure_rollout_materialized(PersistContext::Standard).await?;
+                sess.checkpoint_thread_settings().await?;
+            }
             // Dispatch the SessionConfiguredEvent first and then report any errors.
             let thread_config = sess
                 .effective_thread_config_snapshot(
@@ -2217,7 +2243,7 @@ impl Session {
             };
 
             // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
-            Box::pin(sess.record_initial_history(initial_history)).await;
+            Box::pin(sess.record_initial_history_with_setup(initial_history, persist_retained_setup)).await?;
             Box::pin(sess.record_inherited_items(inherited_items)).await?;
             if restore_child_window {
                 sess.state.lock().await.restore_auto_compact_window(
