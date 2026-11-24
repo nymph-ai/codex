@@ -35,6 +35,7 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ThreadResumeSetupOption;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -959,6 +960,14 @@ impl CodexThread {
             })
             .await?;
         result.await.unwrap_or(Err(CodexErr::InternalAgentDied))
+    }
+
+    /// Applies ordered setup options to a retained, idle root and returns the committed state.
+    pub async fn apply_resume_setup_options(
+        &self,
+        options: &[ThreadResumeSetupOption],
+    ) -> CodexResult<(ThreadConfigSnapshot, Option<String>, bool)> {
+        self.session.apply_resume_setup_options(options).await
     }
 
     /// Restores thread-owned mutable settings captured from another loaded runtime.

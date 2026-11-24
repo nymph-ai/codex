@@ -410,6 +410,7 @@ pub struct CloudConfigBundleLoader {
     snapshot_getter: Option<Arc<CloudConfigBundleSnapshotGetter>>,
     ema_policy: Option<CloudConfigBundlePolicy>,
     config_server: Option<crate::ConfigServer>,
+    unmanaged_preview: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
 }
 
 impl CloudConfigBundleLoader {
@@ -436,6 +437,7 @@ impl CloudConfigBundleLoader {
             snapshot_getter: None,
             ema_policy: None,
             config_server: None,
+            unmanaged_preview: None,
         }
     }
 
@@ -463,6 +465,7 @@ impl CloudConfigBundleLoader {
         F: Fn() -> Fut + Send + Sync + 'static,
         Fut: Future<Output = CloudConfigBundleSnapshot> + Send + 'static,
     {
+        self.unmanaged_preview = None;
         self.ema_policy = Some(policy);
         self.snapshot_getter = Some(Arc::new(move || getter().boxed()));
         self
@@ -484,8 +487,23 @@ impl CloudConfigBundleLoader {
     }
 
     pub fn with_config_server(mut self, service_config: crate::ConfigServer) -> Self {
+        self.unmanaged_preview = None;
         self.config_server = Some(service_config);
         self
+    }
+
+    /// Marks a policy source that can prove it has no eligible account to query.
+    pub fn with_unmanaged_preview_check(
+        mut self,
+        check: impl Fn() -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.unmanaged_preview = Some(Arc::new(check));
+        self
+    }
+
+    /// Whether a read-only configuration load may omit this policy source.
+    pub fn can_preview_without_fetch(&self) -> bool {
+        self.config_server.is_none() && self.unmanaged_preview.as_ref().is_some_and(|check| check())
     }
 
     pub fn config_server(&self) -> Option<&crate::ConfigServer> {
@@ -519,7 +537,7 @@ impl fmt::Debug for CloudConfigBundleLoader {
 
 impl Default for CloudConfigBundleLoader {
     fn default() -> Self {
-        Self::new(async { Ok(None) })
+        Self::new(async { Ok(None) }).with_unmanaged_preview_check(|| true)
     }
 }
 

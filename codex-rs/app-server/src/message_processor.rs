@@ -1750,6 +1750,14 @@ impl MessageProcessor {
             ClientRequest::ThreadRead { params, .. } => {
                 self.thread_processor.thread_read(&request_id, params).await
             }
+            ClientRequest::ThreadSettingsRead { params, .. } => {
+                self.thread_processor.thread_settings_read(params).await
+            }
+            ClientRequest::ThreadSetupSettingsRead { params, .. } => {
+                self.thread_processor
+                    .thread_setup_settings_read(params, app_server_client_name.as_deref())
+                    .await
+            }
             ClientRequest::ThreadReadStateUpdate { params, .. } => {
                 self.thread_processor.thread_read_state_update(params).await
             }

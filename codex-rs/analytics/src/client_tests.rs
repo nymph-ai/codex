@@ -716,6 +716,7 @@ fn sample_thread_start_response() -> ClientResponsePayload {
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
         reasoning_effort: None,
+        collaboration_mode: None,
         multi_agent_mode: Default::default(),
     })
 }
@@ -758,6 +759,7 @@ fn sample_thread_fork_response() -> ClientResponsePayload {
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
         reasoning_effort: None,
+        collaboration_mode: None,
         multi_agent_mode: Default::default(),
     })
 }

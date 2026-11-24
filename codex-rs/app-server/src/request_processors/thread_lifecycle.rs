@@ -7,10 +7,12 @@ use crate::thread_state::ListenerStateCandidate;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadQueueChangedNotification;
+use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_core::ThreadEvictionOutcome;
 use codex_core::ThreadRegistration;
 use codex_extension_api::ThreadIdleCause;
 use codex_protocol::config_types::MultiAgentMode;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use std::borrow::Cow;
@@ -1156,6 +1158,8 @@ pub(super) async fn handle_pending_thread_resume_request(
         .loaded_status_for_thread(&thread.id)
         .await;
 
+    let can_apply_setup =
+        !has_live_in_progress_turn && matches!(&thread_status, ThreadStatus::Idle);
     set_thread_status_and_interrupt_stale_turns(
         &mut thread,
         thread_status.clone(),
@@ -1213,30 +1217,6 @@ pub(super) async fn handle_pending_thread_resume_request(
         }
     }
 
-    {
-        let pending_thread_unloads = pending_thread_unloads.lock().await;
-        if pending_thread_unloads.contains_key(&conversation_id)
-            || matches!(conversation.agent_status().await, AgentStatus::Shutdown)
-        {
-            drop(pending_thread_unloads);
-            outgoing
-                .send_error(request_id, thread_closing_for_resume(conversation_id))
-                .await;
-            return;
-        }
-        if !thread_state_manager
-            .try_add_connection_to_thread(conversation_id, connection_id)
-            .await
-        {
-            tracing::debug!(
-                thread_id = %conversation_id,
-                connection_id = ?connection_id,
-                "skipping running thread resume for closed connection"
-            );
-            return;
-        }
-    }
-
     let (turns_backwards_cursor, items_backwards_cursor) = if let Some(thread_store) =
         pending.resume_cursor_store.as_ref()
     {
@@ -1255,6 +1235,100 @@ pub(super) async fn handle_pending_thread_resume_request(
     } else {
         (None, None)
     };
+
+    let mut setup_notification = None;
+    {
+        let pending_thread_unloads = pending_thread_unloads.lock().await;
+        if pending_thread_unloads.contains_key(&conversation_id)
+            || matches!(conversation.agent_status().await, AgentStatus::Shutdown)
+        {
+            drop(pending_thread_unloads);
+            outgoing
+                .send_error(request_id, thread_closing_for_resume(conversation_id))
+                .await;
+            return;
+        }
+        if let Some(setup) = pending.setup.take() {
+            if !thread_state_manager
+                .has_live_connection(connection_id)
+                .await
+            {
+                return;
+            }
+            if !can_apply_setup {
+                drop(pending_thread_unloads);
+                outgoing
+                    .send_error(
+                        request_id,
+                        invalid_request(
+                            "initialSettings requires an idle thread with no reserved turn",
+                        ),
+                    )
+                    .await;
+                return;
+            }
+            match conversation
+                .apply_resume_setup_options(&setup.options)
+                .await
+            {
+                Ok((snapshot, selected_service_tier, changed)) => {
+                    apply_live_thread_settings(&mut thread, &snapshot);
+                    if changed {
+                        let mut selected = snapshot.clone();
+                        selected.service_tier = selected_service_tier;
+                        let settings =
+                            super::thread_summary::thread_settings_from_config_snapshot(&selected);
+                        thread_state
+                            .lock()
+                            .await
+                            .note_thread_settings(settings.clone());
+                        setup_notification = Some(ServerNotification::ThreadSettingsUpdated(
+                            ThreadSettingsUpdatedNotification {
+                                thread_id: conversation_id.to_string(),
+                                thread_settings: settings,
+                            },
+                        ));
+                    }
+                    pending.config_snapshot = snapshot;
+                }
+                Err(err) => {
+                    drop(pending_thread_unloads);
+                    let error = match err.details() {
+                        CodexErrorDetails::InvalidRequest(message) => {
+                            invalid_request(message.clone())
+                        }
+                        _ => internal_error(format!("could not confirm initialSettings: {err}")),
+                    };
+                    outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            }
+            if let Err(err) =
+                super::thread_processor::ThreadRequestProcessor::set_app_server_client_info(
+                    conversation,
+                    setup.client_name,
+                    setup.client_version,
+                )
+                .await
+            {
+                warn!(
+                    "could not update client metadata after initialSettings commit: {}",
+                    err.message
+                );
+            }
+        }
+        if !thread_state_manager
+            .try_add_connection_to_thread(conversation_id, connection_id)
+            .await
+        {
+            tracing::debug!(
+                thread_id = %conversation_id,
+                connection_id = ?connection_id,
+                "skipping running thread resume for closed connection"
+            );
+            return;
+        }
+    }
 
     let config_snapshot = pending.config_snapshot;
     let sandbox = config_snapshot.sandbox_policy().into();
@@ -1310,6 +1384,17 @@ pub(super) async fn handle_pending_thread_resume_request(
     outgoing
         .send_response_with_thread_originator(request_id, response, originator)
         .await;
+    if let Some(notification) = setup_notification {
+        let observers = thread_state_manager
+            .subscribed_connection_ids(conversation_id)
+            .await
+            .into_iter()
+            .filter(|observer| *observer != connection_id)
+            .collect::<Vec<_>>();
+        outgoing
+            .send_server_notification_to_connections(&observers, notification)
+            .await;
+    }
     // Warm metadata-only resumes skip history reconstruction. Cold paginated children can
     // replay usage using attribution captured before the listener was attached.
     if let Some(token_usage_turn_id) = token_usage_turn_id {

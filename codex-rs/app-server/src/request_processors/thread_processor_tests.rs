@@ -769,6 +769,7 @@ mod thread_processor_behavior_tests {
             personality: None,
             exclude_turns: false,
             initial_turns_page: None,
+            initial_settings: None,
         };
         let config_snapshot = ThreadConfigSnapshot {
             request_country: Default::default(),

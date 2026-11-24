@@ -44,6 +44,10 @@ use crate::session::resolve_multi_agent_version;
 use crate::session::session::Session;
 use crate::session::startup::SessionStartup;
 use crate::session::startup::SessionStartupGuard;
+use crate::session::thread_settings::InitialThreadSetup;
+use crate::session::thread_settings::validate_fork_initial_setup;
+use crate::session::thread_settings::validate_initial_setup_options;
+use crate::session::thread_settings::validate_retained_initial_setup;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use crate::thread_startup_metadata::ThreadStartupMetadata;
@@ -87,6 +91,7 @@ use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
+use codex_protocol::config_types::ThreadResumeSetupOption;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::mcp::ClientMcpExtensions;
@@ -421,6 +426,30 @@ impl ThreadInstructionsProvider for InheritedThreadInstructions {
 }
 
 impl StartThreadOptions {
+    /// Reject malformed setup options before any startup resources are allocated.
+    pub fn validate_initial_setup_options(options: &[ThreadResumeSetupOption]) -> CodexResult<()> {
+        validate_initial_setup_options(options)
+    }
+
+    pub fn validate_retained_initial_setup(history: &InitialHistory) -> CodexResult<()> {
+        validate_retained_initial_setup(history)
+    }
+
+    pub fn validate_fork_initial_setup(
+        source_id: ThreadId,
+        history: &[RolloutItem],
+    ) -> CodexResult<()> {
+        validate_fork_initial_setup(source_id, history)
+    }
+
+    /// Startup-only selections. Core removes them before publishing extension data.
+    pub fn set_initial_setup_options(&mut self, options: Vec<ThreadResumeSetupOption>) {
+        if !options.is_empty() {
+            self.thread_extension_init
+                .insert(InitialThreadSetup(options));
+        }
+    }
+
     fn effective_sources(
         &self,
         default_source: &SessionSource,
@@ -1193,6 +1222,32 @@ impl ThreadManager {
         ProviderAuthContext {
             credentials,
             runtime_auth: runtime.map(|runtime| (runtime, config.runtime_auth_mode)),
+        }
+    }
+
+    /// Resolves the collaboration kind the startup path takes from retained history.
+    pub fn startup_collaboration_mode(
+        history: &InitialHistory,
+    ) -> codex_protocol::config_types::ModeKind {
+        Session::startup_collaboration_mode(history)
+            .map_or(codex_protocol::config_types::ModeKind::Default, |mode| {
+                mode.mode
+            })
+    }
+
+    /// Resolves a tier only when native startup need not consult the model catalog.
+    pub fn preview_startup_service_tier(config: &Config) -> CodexResult<Option<String>> {
+        let Some(tier) = config.service_tier.as_ref() else {
+            return Ok(None);
+        };
+        match crate::session::service_tier_support(tier, &config.features) {
+            crate::session::ServiceTierSupport::Supported => Ok(Some(tier.clone())),
+            crate::session::ServiceTierSupport::Disabled => Ok(None),
+            crate::session::ServiceTierSupport::RequiresModelCatalog => {
+                Err(CodexErr::InvalidRequest(
+                    "setup discovery requires a local service-tier decision".to_string(),
+                ))
+            }
         }
     }
 

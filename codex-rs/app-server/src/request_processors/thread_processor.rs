@@ -39,6 +39,7 @@ use codex_app_server_protocol::ThreadItemOutputDeferral;
 use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadItemsListAnchor;
 use codex_app_server_protocol::ThreadItemsListCursor;
+use codex_app_server_protocol::ThreadOptionSettings;
 use codex_app_server_protocol::ThreadRevertParams;
 use codex_app_server_protocol::ThreadRevertResponse;
 use codex_app_server_protocol::ThreadRevertedNotification;
@@ -50,11 +51,17 @@ use codex_app_server_protocol::ThreadSectionAppearance;
 use codex_app_server_protocol::ThreadSectionChangedNotification;
 use codex_app_server_protocol::ThreadSectionMoveParams;
 use codex_app_server_protocol::ThreadSectionMoveResponse;
+use codex_app_server_protocol::ThreadSettingsOrigin;
+use codex_app_server_protocol::ThreadSettingsReadParams;
+use codex_app_server_protocol::ThreadSettingsReadResponse;
+use codex_app_server_protocol::ThreadSetupSettingsReadParams;
+use codex_app_server_protocol::ThreadSetupSettingsReadResponse;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ThreadIdleCause;
 use codex_protocol::SanitizedGitUrl;
 use codex_protocol::config_types::MultiAgentMode;
+use codex_protocol::config_types::ThreadResumeSetupOption;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::mcp::plain_output_text;
@@ -81,6 +88,41 @@ const MAX_STREAM_SEARCH_TERM_BYTES: usize = 64 * 1024;
 pub(crate) enum ThreadSearchDelivery {
     FinalOnly,
     Streaming,
+}
+
+fn start_project_trust_overrides(
+    cli_overrides: &[(String, TomlValue)],
+    trust_target: &Path,
+) -> Vec<(String, TomlValue)> {
+    let project = toml::map::Map::from_iter([(
+        "trust_level".to_string(),
+        TomlValue::String("trusted".to_string()),
+    )]);
+    let projects =
+        toml::map::Map::from_iter([(project_trust_key(trust_target), TomlValue::Table(project))]);
+    cli_overrides
+        .iter()
+        .cloned()
+        .chain(std::iter::once((
+            "projects".to_string(),
+            TomlValue::Table(projects),
+        )))
+        .collect()
+}
+
+fn loaded_thread_option_settings(snapshot: ThreadConfigSnapshot) -> ThreadOptionSettings {
+    ThreadOptionSettings {
+        origin: ThreadSettingsOrigin::Loaded,
+        cwd: snapshot.cwd().clone(),
+        model: snapshot.model,
+        model_provider: snapshot.model_provider_id,
+        effort: snapshot.reasoning_effort,
+        service_tier: snapshot.service_tier,
+        collaboration_mode: snapshot.collaboration_mode.mode,
+        active_permission_profile: thread_response_active_permission_profile(
+            snapshot.active_permission_profile,
+        ),
+    }
 }
 
 async fn stage_pending_thread_metadata(
@@ -155,6 +197,16 @@ impl<'a> ResumeRetryState<'a> {
         self.held_permit = Some(permit.upgrade().await?);
         Ok(())
     }
+}
+
+struct ResumeConfigInputs {
+    state: ResumeConfigState,
+    request_overrides: Option<HashMap<String, serde_json::Value>>,
+    overrides: ConfigOverrides,
+    clear_reasoning_effort: bool,
+    restore_service_tier: bool,
+    restore_summary: bool,
+    restore_personality: bool,
 }
 
 struct PreparedResumeConfig {
@@ -1176,6 +1228,197 @@ impl ThreadRequestProcessor {
         Ok(Some(response.into()))
     }
 
+    pub(crate) async fn thread_settings_read(
+        &self,
+        params: ThreadSettingsReadParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let thread_id = ThreadId::from_string(&params.thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
+        // Reading a loaded snapshot must not attach this connection to the thread.
+        let settings = if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
+            Some(loaded_thread_option_settings(
+                thread.config_snapshot().await,
+            ))
+        } else {
+            // Use the same history view as native resume. The legacy full-history
+            // read does not support paginated rollouts.
+            let history = self
+                .thread_store
+                .load_latest_model_context(StoreLoadThreadHistoryParams {
+                    thread_id,
+                    include_archived: true,
+                })
+                .await
+                .map_err(thread_store_resume_read_error)?;
+            // A fork may contain settings copied from its parent. Only this
+            // thread's own checkpoint is evidence for the requested ID.
+            latest_owned_thread_settings(&history.items, thread_id).map(|snapshot| {
+                ThreadOptionSettings {
+                    origin: ThreadSettingsOrigin::Retained,
+                    cwd: snapshot.cwd.clone(),
+                    model: snapshot.model.clone(),
+                    model_provider: snapshot.model_provider_id.clone(),
+                    effort: snapshot.reasoning_effort.clone(),
+                    service_tier: snapshot.service_tier.clone(),
+                    collaboration_mode: snapshot.collaboration_mode.mode,
+                    active_permission_profile: thread_response_active_permission_profile(
+                        snapshot.active_permission_profile.clone(),
+                    ),
+                }
+            })
+        };
+        Ok(Some(ThreadSettingsReadResponse { settings }.into()))
+    }
+
+    pub(crate) async fn thread_setup_settings_read(
+        &self,
+        params: ThreadSetupSettingsReadParams,
+        app_server_client_name: Option<&str>,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let ThreadSetupSettingsReadParams {
+            cwd,
+            thread_id,
+            runtime_workspace_roots,
+            model_provider,
+            config: config_overrides,
+        } = params;
+        let thread_id = thread_id
+            .as_deref()
+            .map(ThreadId::from_string)
+            .transpose()
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
+        if let Some(thread_id) = thread_id {
+            if self
+                .pending_thread_unloads
+                .lock()
+                .await
+                .contains_key(&thread_id)
+            {
+                return Err(thread_closing_for_resume(thread_id));
+            }
+            if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
+                let snapshot = thread.config_snapshot().await;
+                if !can_accept_direct_input(thread.multi_agent_version(), &snapshot.session_source)
+                {
+                    return Err(invalid_request(
+                        "setup discovery requires a directly resumable thread",
+                    ));
+                }
+                let runtime_workspace_roots = snapshot.workspace_roots.clone();
+                return Ok(Some(
+                    ThreadSetupSettingsReadResponse {
+                        settings: loaded_thread_option_settings(snapshot),
+                        runtime_workspace_roots,
+                    }
+                    .into(),
+                ));
+            }
+        }
+
+        let manager = self
+            .config_manager
+            .read_only_preview()
+            .map_err(|err| config_load_error(&err))?;
+        let (config, history) = if let Some(thread_id) = thread_id {
+            let resume = ThreadResumeParams {
+                thread_id: thread_id.to_string(),
+                cwd: Some(cwd.to_string_lossy().into_owned()),
+                runtime_workspace_roots,
+                model_provider,
+                config: config_overrides,
+                ..Default::default()
+            };
+            let stored = self
+                .read_stored_thread_for_resume(
+                    &resume.thread_id,
+                    /*path*/ None,
+                    /*include_history*/ false,
+                )
+                .await?;
+            thread_resume_account::check(
+                &self.config.features,
+                app_server_client_name,
+                &self.auth_manager,
+                &stored,
+            )?;
+            let (history, stored) = self
+                .load_resume_initial_history_from_stored_thread(
+                    stored, /*prepared_model_context*/ None,
+                    /*require_current_history*/ false,
+                )
+                .await?;
+            if let Some((source, _)) = history.get_resumed_session_sources()
+                && !can_accept_direct_input(history.get_multi_agent_version(), &source)
+            {
+                return Err(invalid_request(
+                    "setup discovery requires a directly resumable thread",
+                ));
+            }
+            let inputs = self.prepare_resume_config_inputs(&resume, &history).await?;
+            let mut config =
+                Self::load_prepared_resume_config(&manager, &inputs, Some(&stored), &history)
+                    .await?;
+            Self::restore_resume_model_settings(&mut config, &inputs, &history);
+            (config, history)
+        } else {
+            let overrides = ConfigOverrides {
+                cwd: Some(cwd.to_path_buf()),
+                workspace_roots: runtime_workspace_roots.map(native_runtime_workspace_roots).transpose()?,
+                model_provider,
+                codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
+                ..Default::default()
+            };
+            let config = Self::load_thread_start_config(
+                &manager,
+                config_overrides,
+                overrides,
+                /*daybreak_enabled*/ None,
+                /*persist_project_trust*/ false,
+            )
+            .await?;
+            (config, InitialHistory::New)
+        };
+
+        // With an explicit configured model and provider fallback disabled, native startup
+        // selects this model without needing a refreshed catalog to answer the preview.
+        let model = config
+            .model
+            .as_ref()
+            .filter(|model| !model.trim().is_empty())
+            .ok_or_else(|| {
+                invalid_request("setup discovery requires an explicitly configured model")
+            })?;
+        if config
+            .config_layer_stack
+            .requirements()
+            .auto_review_required_for_model(model)
+        {
+            return Err(invalid_request(
+                "setup discovery requires startup permission resolution for this model",
+            ));
+        }
+        let service_tier = ThreadManager::preview_startup_service_tier(&config)
+            .map_err(|err| invalid_request(err.to_string()))?;
+        Ok(Some(
+            ThreadSetupSettingsReadResponse {
+                settings: ThreadOptionSettings {
+                    origin: ThreadSettingsOrigin::Resolved,
+                    cwd: config.cwd,
+                    model: model.clone(),
+                    model_provider: config.model_provider_id,
+                    effort: config.model_reasoning_effort,
+                    service_tier,
+                    collaboration_mode: ThreadManager::startup_collaboration_mode(&history),
+                    active_permission_profile: thread_response_active_permission_profile(
+                        config.permissions.active_permission_profile(),
+                    ),
+                },
+                runtime_workspace_roots: config.workspace_roots,
+            }
+            .into(),
+        ))
+    }
+
     pub(crate) async fn thread_turns_list(
         &self,
         params: ThreadTurnsListParams,
@@ -1302,7 +1545,7 @@ impl ThreadRequestProcessor {
         self.thread_list_state_permit.acquire_exclusive().await
     }
 
-    async fn set_app_server_client_info(
+    pub(super) async fn set_app_server_client_info(
         thread: &CodexThread,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
@@ -1447,6 +1690,7 @@ impl ThreadRequestProcessor {
         request_context: RequestContext,
     ) -> Result<(), JSONRPCErrorError> {
         let ThreadStartParams {
+            initial_settings,
             model,
             model_provider,
             allow_provider_model_fallback,
@@ -1476,6 +1720,17 @@ impl ThreadRequestProcessor {
             daybreak_program_propagation_enrolled,
             environments,
         } = params;
+        let initial_settings = initial_settings.unwrap_or_default();
+        StartThreadOptions::validate_initial_setup_options(&initial_settings)
+            .map_err(|err| invalid_request(err.to_string()))?;
+        if !initial_settings.is_empty()
+            && (ephemeral == Some(true) || allow_provider_model_fallback)
+        {
+            return Err(invalid_request(
+                "initialSettings requires a durable thread and a fixed model",
+            ));
+        }
+
         if matches!(
             history_mode,
             Some(codex_app_server_protocol::ThreadHistoryMode::Paginated)
@@ -1555,6 +1810,7 @@ impl ThreadRequestProcessor {
                 client_mcp_extensions,
                 config,
                 typesafe_overrides,
+                initial_settings,
                 dynamic_tools,
                 selected_capability_roots.unwrap_or_default(),
                 history_mode.map(Into::into),
@@ -1627,33 +1883,13 @@ impl ThreadRequestProcessor {
             .await
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn thread_start_task(
-        listener_task_context: ListenerTaskContext,
-        thread_store: Arc<dyn ThreadStore>,
-        config_manager: ConfigManager,
-        request_id: ConnectionRequestId,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
-        client_mcp_extensions: ClientMcpExtensions,
+    async fn load_thread_start_config(
+        config_manager: &ConfigManager,
         config_overrides: Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: ConfigOverrides,
-        dynamic_tools: Option<Vec<DynamicToolSpec>>,
-        selected_capability_roots: Vec<SelectedCapabilityRoot>,
-        history_mode: Option<ThreadHistoryMode>,
-        session_start_source: Option<codex_app_server_protocol::ThreadStartSource>,
-        thread_source: Option<codex_protocol::protocol::ThreadSource>,
-        project_id: Option<String>,
         daybreak_enabled: Option<bool>,
-        daybreak_program_propagation_enrolled: Option<bool>,
-        environment_requests: Option<Vec<TurnEnvironmentRequest>>,
-        service_name: Option<String>,
-        allow_provider_model_fallback: bool,
-        experimental_raw_events: bool,
-        request_trace: Option<W3cTraceContext>,
-        initial_config_warnings: Arc<Vec<ConfigWarningNotification>>,
-    ) -> Result<(), JSONRPCErrorError> {
-        let thread_start_started_at = std::time::Instant::now();
+        persist_project_trust: bool,
+    ) -> Result<Config, JSONRPCErrorError> {
         let requested_cwd = typesafe_overrides.cwd.clone();
         let mut config = config_manager
             .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
@@ -1687,34 +1923,21 @@ impl ThreadRequestProcessor {
                 .unwrap_or_else(|| config.cwd.clone());
             let current_cli_overrides = config_manager.current_cli_overrides();
             let cli_overrides_with_trust;
-            let cli_overrides_for_reload = if let Err(err) =
-                codex_core::config::set_project_trust_level(
-                    &listener_task_context.codex_home,
-                    trust_target.as_path(),
-                    TrustLevel::Trusted,
-                ) {
+            let cli_overrides_for_reload = if !persist_project_trust {
+                cli_overrides_with_trust =
+                    start_project_trust_overrides(&current_cli_overrides, trust_target.as_path());
+                cli_overrides_with_trust.as_slice()
+            } else if let Err(err) = codex_core::config::set_project_trust_level(
+                config_manager.codex_home(),
+                trust_target.as_path(),
+                TrustLevel::Trusted,
+            ) {
                 warn!(
                     "failed to persist trusted project state for {}; continuing with in-memory trust for this thread: {err}",
                     trust_target.display()
                 );
-                let mut project = toml::map::Map::new();
-                project.insert(
-                    "trust_level".to_string(),
-                    TomlValue::String("trusted".to_string()),
-                );
-                let mut projects = toml::map::Map::new();
-                projects.insert(
-                    project_trust_key(trust_target.as_path()),
-                    TomlValue::Table(project),
-                );
-                cli_overrides_with_trust = current_cli_overrides
-                    .iter()
-                    .cloned()
-                    .chain(std::iter::once((
-                        "projects".to_string(),
-                        TomlValue::Table(projects),
-                    )))
-                    .collect::<Vec<_>>();
+                cli_overrides_with_trust =
+                    start_project_trust_overrides(&current_cli_overrides, trust_target.as_path());
                 cli_overrides_with_trust.as_slice()
             } else {
                 current_cli_overrides.as_slice()
@@ -1729,6 +1952,59 @@ impl ThreadRequestProcessor {
                 )
                 .await
                 .map_err(|err| config_load_error(&err))?;
+        }
+
+        Ok(config)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn thread_start_task(
+        listener_task_context: ListenerTaskContext,
+        thread_store: Arc<dyn ThreadStore>,
+        config_manager: ConfigManager,
+        request_id: ConnectionRequestId,
+        app_server_client_name: Option<String>,
+        app_server_client_version: Option<String>,
+        client_mcp_extensions: ClientMcpExtensions,
+        config_overrides: Option<HashMap<String, serde_json::Value>>,
+        typesafe_overrides: ConfigOverrides,
+        initial_settings: Vec<ThreadResumeSetupOption>,
+        dynamic_tools: Option<Vec<DynamicToolSpec>>,
+        selected_capability_roots: Vec<SelectedCapabilityRoot>,
+        history_mode: Option<ThreadHistoryMode>,
+        session_start_source: Option<codex_app_server_protocol::ThreadStartSource>,
+        thread_source: Option<codex_protocol::protocol::ThreadSource>,
+        project_id: Option<String>,
+        daybreak_enabled: Option<bool>,
+        daybreak_program_propagation_enrolled: Option<bool>,
+        environment_requests: Option<Vec<TurnEnvironmentRequest>>,
+        service_name: Option<String>,
+        allow_provider_model_fallback: bool,
+        experimental_raw_events: bool,
+        request_trace: Option<W3cTraceContext>,
+        initial_config_warnings: Arc<Vec<ConfigWarningNotification>>,
+    ) -> Result<(), JSONRPCErrorError> {
+        let thread_start_started_at = std::time::Instant::now();
+        let config = Self::load_thread_start_config(
+            &config_manager,
+            config_overrides,
+            typesafe_overrides,
+            daybreak_enabled,
+            /*persist_project_trust*/ true,
+        )
+        .await?;
+
+        let has_initial_settings = !initial_settings.is_empty();
+        if has_initial_settings
+            && (config.ephemeral
+                || config
+                    .model
+                    .as_ref()
+                    .is_none_or(|model| model.trim().is_empty()))
+        {
+            return Err(invalid_request(
+                "initialSettings requires a durable thread and an explicitly configured model",
+            ));
         }
 
         // Thread config can include project-local warnings absent at initialization.
@@ -1784,7 +2060,11 @@ impl ThreadRequestProcessor {
         if !selected_capability_roots.is_empty() {
             thread_extension_init.insert(selected_capability_roots);
         }
-        let mut start_options = StartThreadOptions::new(config);
+        let mut start_options = StartThreadOptions {
+            thread_extension_init,
+            ..StartThreadOptions::new(config)
+        };
+        start_options.set_initial_setup_options(initial_settings);
         let reserved_thread_id = if start_options.config.ephemeral {
             None
         } else {
@@ -1826,7 +2106,6 @@ impl ThreadRequestProcessor {
                 metrics_service_name: service_name,
                 parent_trace: request_trace,
                 environments: Some(environment_requests),
-                thread_extension_init,
                 prevent_daybreak_program_propagation_enrollment:
                     daybreak_program_propagation_enrolled == Some(false),
                 client_mcp_extensions,
@@ -1945,6 +2224,7 @@ impl ThreadRequestProcessor {
             sandbox,
             active_permission_profile,
             reasoning_effort: config_snapshot.reasoning_effort,
+            collaboration_mode: has_initial_settings.then_some(config_snapshot.collaboration_mode),
             multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
         };
         let notif = thread_started_notification(thread);
@@ -2676,6 +2956,7 @@ impl ThreadRequestProcessor {
             .load_resume_initial_history_from_stored_thread(
                 stored_thread,
                 /*prepared_model_context*/ None,
+                /*require_current_history*/ false,
             )
             .await?;
         let response_history = thread_history.clone();
@@ -4209,6 +4490,22 @@ impl ThreadRequestProcessor {
                 "`permissions` cannot be combined with `sandbox`",
             ));
         }
+        let initial_settings = params.initial_settings.as_deref().unwrap_or_default();
+        StartThreadOptions::validate_initial_setup_options(initial_settings)
+            .map_err(|err| invalid_request(err.to_string()))?;
+        if !initial_settings.is_empty()
+            && *params
+                != (ThreadResumeParams {
+                    thread_id: params.thread_id.clone(),
+                    initial_settings: params.initial_settings.clone(),
+                    exclude_turns: true,
+                    ..Default::default()
+                })
+        {
+            return Err(invalid_request(
+                "initialSettings requires a metadata-only resume with no other overrides",
+            ));
+        }
         let redact_resume_payloads =
             should_redact_thread_resume_payloads(app_server_client_name.as_deref());
 
@@ -4264,21 +4561,9 @@ impl ThreadRequestProcessor {
             thread_id,
             history,
             path,
-            model,
-            model_provider,
-            service_tier,
-            cwd,
-            runtime_workspace_roots,
-            approval_policy,
-            approvals_reviewer,
-            sandbox,
-            permissions,
-            config: mut request_overrides,
-            base_instructions,
-            developer_instructions,
-            personality,
             exclude_turns,
             initial_turns_page,
+            ..
         } = params.clone();
         let include_turns = !exclude_turns;
 
@@ -4318,6 +4603,7 @@ impl ThreadRequestProcessor {
                 .load_resume_initial_history_from_stored_thread(
                     stored_thread,
                     prepared_model_context,
+                    /*require_current_history*/ !initial_settings.is_empty(),
                 )
                 .await?;
             permit.check_id(stored_thread.thread_id)?;
@@ -4385,6 +4671,11 @@ impl ThreadRequestProcessor {
             .await;
         }
 
+        if !initial_settings.is_empty() {
+            StartThreadOptions::validate_retained_initial_setup(&thread_history)
+                .map_err(|err| invalid_request(err.to_string()))?;
+        }
+
         // Parent-owned V2 children must resume through their owner, not caller configuration.
         if let InitialHistory::Resumed(resumed_history) = &thread_history
             && let Some((source, _)) = thread_history.get_resumed_session_sources()
@@ -4445,169 +4736,26 @@ impl ThreadRequestProcessor {
         }
 
         permit.finish_probe();
-        // Copied or referenced history can contain another thread's settings. Only snapshots
-        // explicitly owned by this thread can restore its cwd and workspace folders.
-        let history_settings = if let InitialHistory::Resumed(resumed) = &thread_history {
-            latest_owned_thread_settings(&resumed.history, resumed.conversation_id)
-        } else {
-            None
-        };
-        let history_cwd = history_settings
-            .map(|settings| settings.cwd.to_path_buf())
-            .or_else(|| thread_history.session_cwd());
-        let mut runtime_workspace_roots = runtime_workspace_roots
-            .map(native_runtime_workspace_roots)
-            .transpose()?;
-        if runtime_workspace_roots.is_none() {
-            // A retained owned snapshot is authoritative. Only use startup metadata when
-            // no such snapshot exists; missing roots do not resurrect an older selection.
-            let saved_workspaces: Option<(&Path, Vec<&Path>)> = match history_settings {
-                Some(settings) => settings.runtime_workspace_roots.as_ref().map(|roots| {
-                    (
-                        settings.cwd.as_path(),
-                        roots.iter().map(AbsolutePathBuf::as_path).collect(),
-                    )
-                }),
-                None => {
-                    if let InitialHistory::Resumed(resumed) = &thread_history
-                        && let Some(RolloutItem::SessionMeta(meta)) = resumed.history.first()
-                        && meta.meta.id == resumed.conversation_id
-                        && let Some(roots) = &meta.meta.runtime_workspace_roots
-                    {
-                        Some((
-                            meta.meta.cwd.as_path(),
-                            roots.iter().map(PathBuf::as_path).collect(),
-                        ))
-                    } else {
-                        None
-                    }
-                }
-            };
-            if let Some((saved_cwd, saved_roots)) = saved_workspaces {
-                let resume_cwd = resolve_request_cwd(cwd.as_ref().map(PathBuf::from))?;
-                // Retarget before validation so an explicit cwd can replace a
-                // startup cwd recorded on another operating system.
-                let restored_roots = path_utils::replace_path_and_deduplicate(
-                    saved_roots,
-                    saved_cwd,
-                    resume_cwd.as_ref().map_or(saved_cwd, AbsolutePathBuf::as_path),
-                )
-                    .into_iter()
-                    .map(|root| {
-                        AbsolutePathBuf::from_absolute_path_checked(root).map_err(|err| {
-                            invalid_params(format!(
-                                "cannot restore workspace root `{}` on this host: {err}. Pass `runtimeWorkspaceRoots` with valid local paths or an empty list.",
-                                root.display()
-                            ))
-                        })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                // Validation can normalize distinct saved paths to the same root.
-                runtime_workspace_roots = Some(resolve_runtime_workspace_roots(restored_roots));
-            }
-        }
-        let mut typesafe_overrides = self.build_thread_config_overrides(
-            model,
-            model_provider,
-            service_tier,
-            cwd,
-            runtime_workspace_roots,
-            approval_policy,
-            approvals_reviewer,
-            sandbox,
-            permissions,
-            base_instructions,
-            developer_instructions,
-            personality,
-        );
-        if typesafe_overrides.approval_policy.is_none()
-            && let Some(value) = request_overrides
-                .as_mut()
-                .and_then(|overrides| overrides.remove("approval_policy"))
-        {
-            let approval_policy = serde_json::from_value(value).map_err(|err| {
-                invalid_params(format!("invalid `approval_policy` config override: {err}"))
-            })?;
-            typesafe_overrides.approval_policy = Some(approval_policy);
-        }
-        let has_explicit_model_resume_override =
-            has_model_resume_override(request_overrides.as_ref(), &typesafe_overrides);
-        let persisted_model_settings = latest_persisted_model_settings(&thread_history);
-        let has_override = |key| {
-            request_overrides
-                .as_ref()
-                .is_some_and(|overrides| overrides.contains_key(key))
-        };
-        let restore_service_tier =
-            typesafe_overrides.service_tier.is_none() && !has_override("service_tier");
-        let restore_summary = !has_override("model_reasoning_summary");
-        let restore_personality =
-            typesafe_overrides.personality.is_none() && !has_override("personality");
-        let persisted_settings = match &thread_history {
-            InitialHistory::Resumed(resumed) => {
-                PersistedResumeSettings::from_history(&resumed.history, resumed.conversation_id)
-            }
-            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => None,
-        };
-        let persisted_metadata = self
-            .load_and_apply_persisted_resume_metadata(
-                &thread_history,
-                persisted_settings.as_ref(),
-                &mut request_overrides,
-                &mut typesafe_overrides,
-            )
-            .await;
-
-        let clear_reasoning_effort = !has_explicit_model_resume_override
-            && persisted_metadata
-                .as_ref()
-                .is_some_and(|metadata| metadata.reasoning_effort.is_none());
-        let config_state = ResumeConfigState {
-            history_cwd: history_cwd.clone(),
-            workspace_roots: typesafe_overrides.workspace_roots.clone(),
-            persisted_metadata,
-            persisted_settings,
-        };
+        let inputs = self
+            .prepare_resume_config_inputs(params, &thread_history)
+            .await?;
         let mut config = match retry.prepared_config.take() {
-            Some(prepared) if prepared.state == config_state => prepared.config,
+            Some(prepared) if prepared.state == inputs.state => prepared.config,
             _ => {
                 // Config loading can call back into Desktop; release both locks during host work.
                 drop(_goal_resume_guard);
                 drop(permit);
-                let config = self
-                    .config_manager
-                    .load_for_resume(
-                        resume_source_thread
-                            .as_ref()
-                            .map(|thread| thread.model_provider.as_str())
-                            .filter(|provider| !provider.is_empty())
-                            .or_else(|| {
-                                config_state
-                                    .persisted_metadata
-                                    .as_ref()
-                                    .map(|metadata| metadata.model_provider.as_str())
-                            })
-                            .or_else(|| match &thread_history {
-                                InitialHistory::Resumed(resumed) => {
-                                    resumed.history.iter().find_map(|item| match item {
-                                        RolloutItem::SessionMeta(meta) => {
-                                            meta.meta.model_provider.as_deref()
-                                        }
-                                        _ => None,
-                                    })
-                                }
-                                _ => None,
-                            }),
-                        request_overrides,
-                        typesafe_overrides,
-                        history_cwd,
-                    )
-                    .await
-                    .map_err(|err| config_load_error(&err))?;
+                let config = Self::load_prepared_resume_config(
+                    &self.config_manager,
+                    &inputs,
+                    resume_source_thread.as_ref(),
+                    &thread_history,
+                )
+                .await?;
                 retry.prepared_config = Some(PreparedResumeConfig {
-                    state: config_state,
+                    state: inputs.state,
                     config,
-                    model_context: if paginated_resume
+                    model_context: if (paginated_resume || !initial_settings.is_empty())
                         && let InitialHistory::Resumed(history) = thread_history
                     {
                         Some(history)
@@ -4619,21 +4767,10 @@ impl ThreadRequestProcessor {
                 return Ok(ControlFlow::Continue(()));
             }
         };
-        if clear_reasoning_effort {
-            config.model_reasoning_effort = None;
-        }
-        if let Some(settings) = persisted_model_settings {
-            if restore_service_tier {
-                config.service_tier.clone_from(&settings.service_tier);
-            }
-            if restore_summary {
-                config.model_reasoning_summary = settings.reasoning_summary;
-            }
-            if restore_personality {
-                config.personality = settings.personality;
-            }
-        }
+        Self::restore_resume_model_settings(&mut config, &inputs, &thread_history);
         let response_history = thread_history.clone();
+        let mut start_options = StartThreadOptions::new(config);
+        start_options.set_initial_setup_options(initial_settings.to_vec());
 
         match self
             .thread_manager
@@ -4646,7 +4783,7 @@ impl ThreadRequestProcessor {
                     ThreadResumeTarget::DaemonRecovery(_) => None,
                 },
                 client_mcp_extensions,
-                ..StartThreadOptions::new(config)
+                ..start_options
             })
             .await
         {
@@ -4896,6 +5033,217 @@ impl ThreadRequestProcessor {
         Ok(ControlFlow::Break(()))
     }
 
+    async fn prepare_resume_config_inputs(
+        &self,
+        params: &ThreadResumeParams,
+        thread_history: &InitialHistory,
+    ) -> Result<ResumeConfigInputs, JSONRPCErrorError> {
+        let ThreadResumeParams {
+            model,
+            model_provider,
+            service_tier,
+            cwd,
+            runtime_workspace_roots,
+            approval_policy,
+            approvals_reviewer,
+            sandbox,
+            permissions,
+            config: mut request_overrides,
+            base_instructions,
+            developer_instructions,
+            personality,
+            ..
+        } = params.clone();
+        // Copied or referenced history can contain another thread's settings. Only snapshots
+        // explicitly owned by this thread can restore its cwd and workspace folders.
+        let history_settings = if let InitialHistory::Resumed(resumed) = thread_history {
+            latest_owned_thread_settings(&resumed.history, resumed.conversation_id)
+        } else {
+            None
+        };
+        let history_cwd = history_settings
+            .map(|settings| settings.cwd.to_path_buf())
+            .or_else(|| thread_history.session_cwd());
+        let mut runtime_workspace_roots =
+            runtime_workspace_roots.map(native_runtime_workspace_roots).transpose()?;
+        if runtime_workspace_roots.is_none() {
+            // A retained owned snapshot is authoritative. Only use startup metadata when
+            // no such snapshot exists; missing roots do not resurrect an older selection.
+            let saved_workspaces: Option<(&Path, Vec<&Path>)> = match history_settings {
+                Some(settings) => settings.runtime_workspace_roots.as_ref().map(|roots| {
+                    (
+                        settings.cwd.as_path(),
+                        roots.iter().map(AbsolutePathBuf::as_path).collect(),
+                    )
+                }),
+                None => {
+                    if let InitialHistory::Resumed(resumed) = thread_history
+                        && let Some(RolloutItem::SessionMeta(meta)) = resumed.history.first()
+                        && meta.meta.id == resumed.conversation_id
+                        && let Some(roots) = &meta.meta.runtime_workspace_roots
+                    {
+                        Some((
+                            meta.meta.cwd.as_path(),
+                            roots.iter().map(PathBuf::as_path).collect(),
+                        ))
+                    } else {
+                        None
+                    }
+                }
+            };
+            if let Some((saved_cwd, saved_roots)) = saved_workspaces {
+                let resume_cwd = resolve_request_cwd(cwd.as_ref().map(PathBuf::from))?;
+                // Retarget before validation so an explicit cwd can replace a
+                // startup cwd recorded on another operating system.
+                let restored_roots = path_utils::replace_path_and_deduplicate(
+                    saved_roots,
+                    saved_cwd,
+                    resume_cwd.as_ref().map_or(saved_cwd, AbsolutePathBuf::as_path),
+                )
+                    .into_iter()
+                    .map(|root| {
+                        AbsolutePathBuf::from_absolute_path_checked(root).map_err(|err| {
+                            invalid_params(format!(
+                                "cannot restore workspace root `{}` on this host: {err}. Pass `runtimeWorkspaceRoots` with valid local paths or an empty list.",
+                                root.display()
+                            ))
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                // Validation can normalize distinct saved paths to the same root.
+                runtime_workspace_roots = Some(resolve_runtime_workspace_roots(restored_roots));
+            }
+        }
+        let mut typesafe_overrides = self.build_thread_config_overrides(
+            model,
+            model_provider,
+            service_tier,
+            cwd,
+            runtime_workspace_roots,
+            approval_policy,
+            approvals_reviewer,
+            sandbox,
+            permissions,
+            base_instructions,
+            developer_instructions,
+            personality,
+        );
+        if typesafe_overrides.approval_policy.is_none()
+            && let Some(value) = request_overrides
+                .as_mut()
+                .and_then(|overrides| overrides.remove("approval_policy"))
+        {
+            let approval_policy = serde_json::from_value(value).map_err(|err| {
+                invalid_params(format!("invalid `approval_policy` config override: {err}"))
+            })?;
+            typesafe_overrides.approval_policy = Some(approval_policy);
+        }
+        let has_explicit_model_resume_override =
+            has_model_resume_override(request_overrides.as_ref(), &typesafe_overrides);
+        let has_override = |key| {
+            request_overrides
+                .as_ref()
+                .is_some_and(|overrides| overrides.contains_key(key))
+        };
+        let restore_service_tier =
+            typesafe_overrides.service_tier.is_none() && !has_override("service_tier");
+        let restore_summary = !has_override("model_reasoning_summary");
+        let restore_personality =
+            typesafe_overrides.personality.is_none() && !has_override("personality");
+        let persisted_settings = match thread_history {
+            InitialHistory::Resumed(resumed) => {
+                PersistedResumeSettings::from_history(&resumed.history, resumed.conversation_id)
+            }
+            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => None,
+        };
+        let persisted_metadata = self
+            .load_and_apply_persisted_resume_metadata(
+                thread_history,
+                persisted_settings.as_ref(),
+                &mut request_overrides,
+                &mut typesafe_overrides,
+            )
+            .await;
+
+        let clear_reasoning_effort = !has_explicit_model_resume_override
+            && persisted_metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.reasoning_effort.is_none());
+        let config_state = ResumeConfigState {
+            history_cwd: history_cwd.clone(),
+            workspace_roots: typesafe_overrides.workspace_roots.clone(),
+            persisted_metadata,
+            persisted_settings,
+        };
+        Ok(ResumeConfigInputs {
+            state: config_state,
+            request_overrides,
+            overrides: typesafe_overrides,
+            clear_reasoning_effort,
+            restore_service_tier,
+            restore_summary,
+            restore_personality,
+        })
+    }
+
+    async fn load_prepared_resume_config(
+        manager: &ConfigManager,
+        inputs: &ResumeConfigInputs,
+        source: Option<&StoredThread>,
+        history: &InitialHistory,
+    ) -> Result<Config, JSONRPCErrorError> {
+        manager
+            .load_for_resume(
+                source
+                    .map(|thread| thread.model_provider.as_str())
+                    .filter(|provider| !provider.is_empty())
+                    .or_else(|| {
+                        inputs
+                            .state
+                            .persisted_metadata
+                            .as_ref()
+                            .map(|metadata| metadata.model_provider.as_str())
+                    })
+                    .or_else(|| match history {
+                        InitialHistory::Resumed(resumed) => {
+                            resumed.history.iter().find_map(|item| match item {
+                                RolloutItem::SessionMeta(meta) => {
+                                    meta.meta.model_provider.as_deref()
+                                }
+                                _ => None,
+                            })
+                        }
+                        _ => None,
+                    }),
+                inputs.request_overrides.clone(),
+                inputs.overrides.clone(),
+                inputs.state.history_cwd.clone(),
+            )
+            .await
+            .map_err(|err| config_load_error(&err))
+    }
+
+    fn restore_resume_model_settings(
+        config: &mut Config,
+        inputs: &ResumeConfigInputs,
+        history: &InitialHistory,
+    ) {
+        if inputs.clear_reasoning_effort {
+            config.model_reasoning_effort = None;
+        }
+        if let Some(settings) = latest_persisted_model_settings(history) {
+            if inputs.restore_service_tier {
+                config.service_tier.clone_from(&settings.service_tier);
+            }
+            if inputs.restore_summary {
+                config.model_reasoning_summary = settings.reasoning_summary;
+            }
+            if inputs.restore_personality {
+                config.personality = settings.personality;
+            }
+        }
+    }
+
     async fn load_and_apply_persisted_resume_metadata(
         &self,
         thread_history: &InitialHistory,
@@ -4947,6 +5295,10 @@ impl ThreadRequestProcessor {
         app_server_client_version: Option<String>,
         cold_resume_history: Option<&[RolloutItem]>,
     ) -> Result<RunningThreadResumeResult, JSONRPCErrorError> {
+        let has_setup = params
+            .initial_settings
+            .as_ref()
+            .is_some_and(|options| !options.is_empty());
         let running_thread = if params.history.is_some() {
             if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
                 && self
@@ -4966,7 +5318,9 @@ impl ThreadRequestProcessor {
             // A loaded thread is resumable before its first turn: another client of
             // this daemon (a second UI, or the one that started it reconnecting) joins
             // it, so its rollout is written now rather than at the first user message.
-            existing_thread.ensure_rollout_materialized().await;
+            if !has_setup {
+                existing_thread.ensure_rollout_materialized().await;
+            }
             let source_thread = self
                 .read_stored_thread_for_resume(
                     &params.thread_id,
@@ -5027,6 +5381,17 @@ impl ThreadRequestProcessor {
                     ))
             {
                 return Ok(RunningThreadResumeResult::NeedsExclusive);
+            }
+            if has_setup
+                && (config_snapshot.parent_thread_id.is_some()
+                    || !can_accept_direct_input(
+                        existing_thread.multi_agent_version(),
+                        &config_snapshot.session_source,
+                    ))
+            {
+                return Err(invalid_request(
+                    "initialSettings requires a directly resumable root thread",
+                ));
             }
             let mismatch_details = collect_resume_override_mismatches(
                 params,
@@ -5149,12 +5514,21 @@ impl ThreadRequestProcessor {
                 thread_state.clone(),
             )
             .await?;
-            Self::set_app_server_client_info(
-                existing_thread.as_ref(),
-                app_server_client_name,
-                app_server_client_version,
-            )
-            .await?;
+            let setup = if has_setup {
+                Some(crate::thread_state::PendingResumeSetup {
+                    options: params.initial_settings.clone().unwrap_or_default(),
+                    client_name: app_server_client_name,
+                    client_version: app_server_client_version,
+                })
+            } else {
+                Self::set_app_server_client_info(
+                    existing_thread.as_ref(),
+                    app_server_client_name,
+                    app_server_client_version,
+                )
+                .await?;
+                None
+            };
 
             let mut thread_summary = self.stored_thread_to_api_thread(
                 source_thread,
@@ -5253,6 +5627,7 @@ impl ThreadRequestProcessor {
                     paginated_initial_turns_page_with_active_slot,
                     resume_cursor_store,
                     redact_resume_payloads,
+                    setup,
                 }),
                 completion_tx,
             };
@@ -5285,8 +5660,11 @@ impl ThreadRequestProcessor {
         &self,
         stored_thread: StoredThread,
         prepared_model_context: Option<ResumedHistory>,
+        require_current_history: bool,
     ) -> Result<(InitialHistory, StoredThread), JSONRPCErrorError> {
-        if matches!(stored_thread.history_mode, ThreadHistoryMode::Paginated) {
+        if require_current_history
+            || matches!(stored_thread.history_mode, ThreadHistoryMode::Paginated)
+        {
             if let Some(context) = prepared_model_context
                 && context.conversation_id == stored_thread.thread_id
                 && context.rollout_path == stored_thread.rollout_path
@@ -5582,6 +5960,29 @@ impl ThreadRequestProcessor {
         app_server_client_version: Option<String>,
         client_mcp_extensions: ClientMcpExtensions,
     ) -> Result<(), JSONRPCErrorError> {
+        let has_initial_settings = params
+            .initial_settings
+            .as_ref()
+            .is_some_and(|options| !options.is_empty());
+        StartThreadOptions::validate_initial_setup_options(
+            params.initial_settings.as_deref().unwrap_or_default(),
+        )
+        .map_err(|err| invalid_request(err.to_string()))?;
+        if has_initial_settings
+            && params
+                != (ThreadForkParams {
+                    thread_id: params.thread_id.clone(),
+                    initial_settings: params.initial_settings.clone(),
+                    last_turn_id: params.last_turn_id.clone(),
+                    before_turn_id: params.before_turn_id.clone(),
+                    exclude_turns: true,
+                    ..Default::default()
+                })
+        {
+            return Err(invalid_request(
+                "initialSettings requires a durable metadata-only fork by thread id with no other overrides",
+            ));
+        }
         if params.experimental_disable_prediction_mcp && !params.experimental_prediction_mode {
             return Err(invalid_request(
                 "`experimentalDisablePredictionMcp` requires `experimentalPredictionMode: true`",
@@ -5614,6 +6015,7 @@ impl ThreadRequestProcessor {
         }
         let ThreadForkParams {
             thread_id,
+            initial_settings,
             experimental_prediction_mode,
             experimental_disable_prediction_mcp,
             last_turn_id,
@@ -5732,6 +6134,11 @@ impl ThreadRequestProcessor {
             None
         };
         let paginated_source = matches!(source_thread.history_mode, ThreadHistoryMode::Paginated);
+        if has_initial_settings && !paginated_source {
+            return Err(invalid_request(
+                "fork initialSettings requires a paginated native source",
+            ));
+        }
         if attach_to_source && !paginated_source {
             return Err(invalid_request(
                 "attachToSource requires a paginated parent",
@@ -5796,6 +6203,13 @@ impl ThreadRequestProcessor {
         } else {
             None
         };
+        if has_initial_settings && let Some(prepared) = prepared_fork.as_ref() {
+            StartThreadOptions::validate_fork_initial_setup(
+                prepared.source_thread_id,
+                &prepared.model_context,
+            )
+            .map_err(|err| invalid_request(err.to_string()))?;
+        }
         let source_history_items = if let Some(prepared_fork) = prepared_fork.as_ref() {
             Arc::clone(&prepared_fork.model_context)
         } else {
@@ -5930,7 +6344,7 @@ impl ThreadRequestProcessor {
             );
         }
         let (inherited_options, inherited_settings) = inherited_fork.unzip();
-        let options = if let Some(options) = inherited_options {
+        let mut options = if let Some(options) = inherited_options {
             *options
         } else {
             // Derive a Config using the same logic as new conversation, honoring overrides if provided.
@@ -5944,6 +6358,12 @@ impl ThreadRequestProcessor {
                 ..StartThreadOptions::new(config)
             }
         };
+        if has_initial_settings && options.config.model.is_none() {
+            return Err(invalid_request(
+                "fork initialSettings requires a fixed model",
+            ));
+        }
+        options.set_initial_setup_options(initial_settings.unwrap_or_default());
         let goals_enabled = options.config.features.enabled(Feature::Goals);
 
         let fallback_model_provider = options.config.model_provider_id.clone();
@@ -6235,6 +6655,7 @@ impl ThreadRequestProcessor {
             sandbox,
             active_permission_profile,
             reasoning_effort: config_snapshot.reasoning_effort.clone(),
+            collaboration_mode: has_initial_settings.then_some(config_snapshot.collaboration_mode),
             multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
         };
 

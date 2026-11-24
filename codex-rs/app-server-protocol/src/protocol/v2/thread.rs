@@ -25,9 +25,11 @@ use codex_experimental_api_macros::ExperimentalApi;
 pub use codex_protocol::capabilities::CapabilityRootLocation;
 pub use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ThreadResumeSetupOption;
 pub use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
 pub use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
 pub use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
@@ -62,6 +64,12 @@ pub enum ThreadStartSource {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadStartParams {
+    /// Ordered selections applied before starting a durable thread.
+    #[experimental("thread/start.initialSettings")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub initial_settings: Option<Vec<ThreadResumeSetupOption>>,
+
     #[ts(optional = nullable)]
     pub model: Option<String>,
     #[ts(optional = nullable)]
@@ -228,6 +236,12 @@ pub struct ThreadStartResponse {
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// The accepted collaboration mode when initialSettings were supplied.
+    #[experimental("thread/start.collaborationMode")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub collaboration_mode: Option<CollaborationMode>,
+
     /// @deprecated Always `explicitRequestOnly`. Use `reasoningEffort` for Ultra behavior.
     #[experimental("thread/start.multiAgentMode")]
     #[serde(default)]
@@ -350,6 +364,71 @@ pub struct ThreadSettings {
     pub personality: Option<Personality>,
 }
 
+/// Read the current settings of a loaded thread or its own durable settings checkpoint.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSettingsReadParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ThreadSettingsOrigin {
+    Loaded,
+    Retained,
+    Resolved,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadOptionSettings {
+    pub origin: ThreadSettingsOrigin,
+    pub cwd: AbsolutePathBuf,
+    pub model: String,
+    pub model_provider: String,
+    pub effort: Option<ReasoningEffort>,
+    pub service_tier: Option<String>,
+    pub collaboration_mode: ModeKind,
+    pub active_permission_profile: Option<ActivePermissionProfile>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSettingsReadResponse {
+    /// A saved thread without an attributable settings checkpoint has no snapshot.
+    pub settings: Option<ThreadOptionSettings>,
+}
+
+/// Resolves the current setup configuration for a new or resumed root thread.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSetupSettingsReadParams {
+    pub cwd: AbsolutePathBuf,
+    #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
+    #[ts(optional = nullable)]
+    pub runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
+    /// The provider the same client would pass on start or resume.
+    #[ts(optional = nullable)]
+    pub model_provider: Option<String>,
+    /// The request configuration overrides the same client would pass on setup.
+    #[ts(optional = nullable)]
+    pub config: Option<HashMap<String, JsonValue>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSetupSettingsReadResponse {
+    pub settings: ThreadOptionSettings,
+    pub runtime_workspace_roots: Vec<AbsolutePathBuf>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -379,6 +458,13 @@ pub struct ThreadSettingsUpdatedNotification {
 /// Prefer using thread_id whenever possible.
 pub struct ThreadResumeParams {
     pub thread_id: String,
+    /// Apply these options to a durable root before a metadata-only rejoin.
+    /// A loaded root must be idle. A cold root requires a settled retained turn or
+    /// an owned setup checkpoint from before its first turn.
+    #[experimental("thread/resume.initialSettings")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub initial_settings: Option<Vec<ThreadResumeSetupOption>>,
 
     /// [UNSTABLE] FOR CODEX CLOUD - DO NOT USE.
     /// If specified, the thread will be resumed with the provided history
@@ -575,6 +661,12 @@ impl From<ThreadTurnsListResponse> for TurnsPage {
 /// Prefer using thread_id whenever possible.
 pub struct ThreadForkParams {
     pub thread_id: String,
+    /// Apply typed setup selections before returning a durable fork at a settled
+    /// native history boundary. Requires a metadata-only fork by thread ID.
+    #[experimental("thread/fork.initialSettings")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub initial_settings: Option<Vec<ThreadResumeSetupOption>>,
 
     /// Start from the loaded parent's effective config, tools, environments, and
     /// persisted history to maximize prompt-cache reuse. Requires a loaded,
@@ -718,6 +810,11 @@ pub struct ThreadForkResponse {
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// The accepted collaboration mode when initialSettings were supplied.
+    #[experimental("thread/fork.collaborationMode")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub collaboration_mode: Option<CollaborationMode>,
     /// @deprecated Always `explicitRequestOnly`. Use `reasoningEffort` for Ultra behavior.
     #[experimental("thread/fork.multiAgentMode")]
     #[serde(default)]

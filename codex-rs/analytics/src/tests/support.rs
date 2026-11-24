@@ -168,6 +168,7 @@ pub(super) fn sample_thread_start_response(
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
         reasoning_effort: None,
+        collaboration_mode: None,
         multi_agent_mode: Default::default(),
     })
 }

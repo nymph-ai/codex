@@ -199,6 +199,8 @@ use codex_thread_store::PersistContext;
 use codex_thread_store::ReadThreadParams;
 use codex_thread_store::ResumeThreadParams;
 use codex_thread_store::ThreadStore;
+use codex_thread_store::ThreadStoreError;
+use codex_thread_store::ThreadStoreResult;
 use codex_thread_store::ThreadStoreResumePreparation;
 use codex_utils_audio::prepare_response_items as prepare_audio_response_items;
 use codex_utils_git_discovery::GitRootDiscovery;
@@ -294,7 +296,7 @@ pub(crate) mod startup_prewarm;
 mod step_activation;
 pub(crate) mod step_context;
 pub(crate) mod step_settings;
-mod thread_settings;
+pub(crate) mod thread_settings;
 pub(crate) mod time_reminder;
 mod token_budget;
 pub(crate) mod turn;
@@ -666,6 +668,39 @@ impl Session {
         Ok((model, model_info))
     }
 
+    pub(crate) fn startup_collaboration_mode(
+        history: &InitialHistory,
+    ) -> Option<&CollaborationMode> {
+        match history {
+            InitialHistory::Resumed(resumed) => resumed
+                .history
+                .iter()
+                .rev()
+                .find_map(|item| match item {
+                    RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event))
+                        if event.thread_id == Some(resumed.conversation_id) =>
+                    {
+                        Some(&event.thread_settings.collaboration_mode)
+                    }
+                    _ => None,
+                })
+                .or_else(|| {
+                    resumed
+                        .history
+                        .iter()
+                        .rev()
+                        .find_map(|item| match item {
+                            RolloutItem::TurnContext(context) => {
+                                Some(context.collaboration_mode.as_ref())
+                            }
+                            _ => None,
+                        })
+                        .flatten()
+                }),
+            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => None,
+        }
+    }
+
     /// Spawn and initialize a new session.
     /// Hide the concrete startup future from callers while keeping initialization lazy.
     #[inline(never)]
@@ -769,6 +804,32 @@ impl Session {
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
+
+        let initial_setup = thread_extension_init.remove::<thread_settings::InitialThreadSetup>();
+        if initial_setup.is_some() {
+            if config.ephemeral || session_source.is_non_root_agent() || parent_thread_id.is_some()
+            {
+                return Err(CodexErr::InvalidRequest(
+                    "initialSettings requires a durable root thread".into(),
+                ));
+            }
+            match &conversation_history {
+                InitialHistory::New | InitialHistory::Cleared => {}
+                InitialHistory::Resumed(_) => {
+                    thread_settings::validate_retained_initial_setup(&conversation_history)?;
+                }
+                InitialHistory::Forked(items) => {
+                    let Some(source_id) = forked_from_thread_id.filter(|_| {
+                        matches!(&fork_persistence, ForkPersistence::Referenced { .. })
+                    }) else {
+                        return Err(CodexErr::InvalidRequest(
+                            "initialSettings requires a reference-backed native fork".into(),
+                        ));
+                    };
+                    thread_settings::validate_fork_initial_setup(source_id, items)?;
+                }
+            }
+        }
 
         let isolation = thread_extension_init
             .get::<codex_extension_api::SessionIsolation>()
@@ -940,7 +1001,6 @@ impl Session {
             )?;
             token_budget::apply_model_defaults(Arc::make_mut(&mut config), &model_info);
         }
-        let configured_config = Arc::clone(&config);
         let multi_agent_version = config.multi_agent_version_override().or_else(|| {
             resolve_multi_agent_version(&conversation_history, inherited_multi_agent_version)
         });
@@ -979,34 +1039,7 @@ impl Session {
         });
         // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
         // to avoid extracting these fields separately and constructing CollaborationMode here.
-        let persisted_collaboration_mode = match &conversation_history {
-            InitialHistory::Resumed(resumed) => resumed
-                .history
-                .iter()
-                .rev()
-                .find_map(|item| match item {
-                    RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event))
-                        if event.thread_id == Some(resumed.conversation_id) =>
-                    {
-                        Some(&event.thread_settings.collaboration_mode)
-                    }
-                    _ => None,
-                })
-                .or_else(|| {
-                    resumed
-                        .history
-                        .iter()
-                        .rev()
-                        .find_map(|item| match item {
-                            RolloutItem::TurnContext(context) => {
-                                Some(context.collaboration_mode.as_ref())
-                            }
-                            _ => None,
-                        })
-                        .flatten()
-                }),
-            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => None,
-        };
+        let persisted_collaboration_mode = Self::startup_collaboration_mode(&conversation_history);
         let collaboration_mode = CollaborationMode {
             mode: ModeKind::Default,
             settings: Settings {
@@ -1022,6 +1055,19 @@ impl Session {
                 /*developer_instructions*/ None,
             )
         });
+        let collaboration_mode = if let Some(setup) = initial_setup.as_deref() {
+            let selected = thread_settings::resolve_initial_setup_options(
+                collaboration_mode,
+                &setup.0,
+                Some(&model_info),
+            )?;
+            Arc::make_mut(&mut config).model_reasoning_effort =
+                selected.settings.reasoning_effort.clone();
+            selected
+        } else {
+            collaboration_mode
+        };
+        let configured_config = Arc::clone(&config);
         let initial_service_tier_warning = unsupported_service_tier_warning(
             config.service_tier.as_deref(),
             &config.features,
@@ -1096,6 +1142,7 @@ impl Session {
             startup.clone(),
             session_configuration,
             attached_thread,
+            initial_setup.is_some(),
             prompt_cache_key,
             &environment_selections,
             config.clone(),
@@ -1334,22 +1381,37 @@ pub(crate) fn new_submission_id() -> String {
     Uuid::now_v7().to_string()
 }
 
+pub(crate) enum ServiceTierSupport {
+    Supported,
+    Disabled,
+    RequiresModelCatalog,
+}
+
+pub(crate) fn service_tier_support(service_tier: &str, features: &Features) -> ServiceTierSupport {
+    if service_tier == ServiceTier::Flex.request_value() {
+        ServiceTierSupport::Supported
+    } else if !features.service_tier_enabled(service_tier) {
+        ServiceTierSupport::Disabled
+    } else if service_tier == SERVICE_TIER_DEFAULT_REQUEST_VALUE {
+        ServiceTierSupport::Supported
+    } else {
+        ServiceTierSupport::RequiresModelCatalog
+    }
+}
+
 pub(crate) fn get_service_tier(
     configured_service_tier: Option<String>,
     features: &Features,
     model_info: &ModelInfo,
 ) -> Option<String> {
     let service_tier = configured_service_tier?;
-    if service_tier == ServiceTier::Flex.request_value() {
-        return Some(service_tier);
+    match service_tier_support(&service_tier, features) {
+        ServiceTierSupport::Supported => Some(service_tier),
+        ServiceTierSupport::Disabled => None,
+        ServiceTierSupport::RequiresModelCatalog => model_info
+            .supports_service_tier(&service_tier)
+            .then_some(service_tier),
     }
-    if features.service_tier_enabled(&service_tier)
-        && (service_tier == SERVICE_TIER_DEFAULT_REQUEST_VALUE
-            || model_info.supports_service_tier(&service_tier))
-    {
-        return Some(service_tier);
-    }
-    None
 }
 
 fn unsupported_service_tier_warning(
@@ -1785,7 +1847,21 @@ impl Session {
         state.clear_connector_selection();
     }
 
+    #[cfg(test)]
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
+        self.record_initial_history_with_setup(
+            conversation_history,
+            /*persist_retained_setup*/ false,
+        )
+        .await
+        .expect("ordinary history reconstruction does not return a persistence error");
+    }
+
+    async fn record_initial_history_with_setup(
+        &self,
+        conversation_history: InitialHistory,
+        persist_retained_setup: bool,
+    ) -> ThreadStoreResult<()> {
         let (is_subagent, is_paginated_subagent) = {
             let state = self.state.lock().await;
             let session_configuration = &state.session_configuration;
@@ -1870,13 +1946,17 @@ impl Session {
                 });
                 // Persist changed effective settings even when no turn follows the resume.
                 if persisted_settings != Some(&current_settings) {
-                    self.persist_rollout_items(&[RolloutItem::EventMsg(
-                        EventMsg::ThreadSettingsApplied(ThreadSettingsAppliedEvent {
-                            thread_id: Some(thread_id),
-                            thread_settings: current_settings,
-                        }),
-                    )])
-                    .await;
+                    if persist_retained_setup {
+                        self.checkpoint_thread_settings().await?;
+                    } else {
+                        self.persist_rollout_items(&[RolloutItem::EventMsg(
+                            EventMsg::ThreadSettingsApplied(ThreadSettingsAppliedEvent {
+                                thread_id: Some(thread_id),
+                                thread_settings: current_settings,
+                            }),
+                        )])
+                        .await;
+                    }
                 }
 
                 // Defer seeding the session's initial context until the first turn starts so
@@ -1931,7 +2011,19 @@ impl Session {
                         rollout_items.push(thread_settings_applied);
                     }
                 }
-                self.persist_rollout_items(&rollout_items).await;
+                let setup_writer = persist_retained_setup
+                    .then(|| {
+                        self.live_thread()
+                            .ok_or_else(|| ThreadStoreError::Internal {
+                                message: "fork initialSettings requires a live writer".into(),
+                            })
+                    })
+                    .transpose()?;
+                if let Some(writer) = setup_writer {
+                    writer.append_items(&rollout_items).await?;
+                } else {
+                    self.persist_rollout_items(&rollout_items).await;
+                }
                 if self.preserve_parent_tool_declarations() {
                     let notice = DeveloperInstructions::new(
                         "<mcp_tools>\nMCP tools are unavailable for this request.\n</mcp_tools>",
@@ -1952,11 +2044,16 @@ impl Session {
                         PersistContext::Standard
                     }
                 };
-                self.ensure_rollout_materialized(persist_context).await;
+                if let Some(writer) = setup_writer {
+                    writer.persist(persist_context).await?;
+                    writer.flush().await?;
+                } else {
+                    self.ensure_rollout_materialized(persist_context).await;
 
-                // Flush after seeding history and any persisted rollout copy.
-                if !is_subagent {
-                    let _ = self.flush_rollout().await;
+                    // Flush after seeding history and any persisted rollout copy.
+                    if !is_subagent {
+                        let _ = self.flush_rollout().await;
+                    }
                 }
                 Some(turn_context)
             }
@@ -1973,6 +2070,7 @@ impl Session {
                     .await;
             }
         }
+        Ok(())
     }
 
     #[instrument(
