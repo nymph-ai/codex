@@ -1328,7 +1328,8 @@ impl ThreadRequestProcessor {
             let resume = ThreadResumeParams {
                 thread_id: thread_id.to_string(),
                 cwd: Some(cwd.to_string_lossy().into_owned()),
-                runtime_workspace_roots,
+                runtime_workspace_roots: runtime_workspace_roots
+                    .map(|roots| LegacyAppPathString::from_abs_paths(&roots)),
                 model_provider,
                 config: config_overrides,
                 ..Default::default()
@@ -1368,9 +1369,7 @@ impl ThreadRequestProcessor {
         } else {
             let overrides = ConfigOverrides {
                 cwd: Some(cwd.to_path_buf()),
-                workspace_roots: runtime_workspace_roots
-                    .map(native_runtime_workspace_roots)
-                    .transpose()?,
+                workspace_roots: runtime_workspace_roots.map(resolve_runtime_workspace_roots),
                 model_provider,
                 codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
                 ..Default::default()
