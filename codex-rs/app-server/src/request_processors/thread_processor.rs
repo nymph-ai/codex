@@ -5318,19 +5318,24 @@ impl ThreadRequestProcessor {
         } else if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
             && let Ok(existing_thread) = self.thread_manager.get_thread(existing_thread_id).await
         {
-            // A loaded thread is resumable before its first turn: another client of
-            // this daemon (a second UI, or the one that started it reconnecting) joins
-            // it, so its rollout is written now rather than at the first user message.
-            if !has_setup {
+            let read = StoreReadThreadParams {
+                thread_id: existing_thread_id,
+                include_archived: true,
+                include_history: false,
+            };
+            let mut stored = self.thread_store.read_thread(read.clone()).await;
+            if !has_setup
+                && stored
+                    .as_ref()
+                    .is_err_and(|err| err.is_missing_for_read(existing_thread_id))
+            {
+                // A new idle thread can still have a lazy rollout. Existing metadata
+                // can be read while an active turn is waiting on the history writer.
                 existing_thread.ensure_rollout_materialized().await;
+                stored = self.thread_store.read_thread(read).await;
             }
-            let source_thread = self
-                .read_stored_thread_for_resume(
-                    &params.thread_id,
-                    /*path*/ None,
-                    /*include_history*/ false,
-                )
-                .await?;
+            let source_thread =
+                stored_thread_for_resume(stored.map_err(thread_store_resume_read_error)?)?;
             Some((existing_thread_id, existing_thread, source_thread))
         } else {
             let source_thread = self
@@ -5775,14 +5780,7 @@ impl ThreadRequestProcessor {
                 )));
             }
         }
-        if stored_thread.archived_at.is_some() {
-            let thread_id = stored_thread.thread_id;
-            return Err(invalid_request(format!(
-                "session {thread_id} is archived. Run `codex unarchive {thread_id}` to unarchive it first."
-            )));
-        }
-
-        Ok(stored_thread)
+        stored_thread_for_resume(stored_thread)
     }
 
     #[tracing::instrument(level = "trace", skip_all)]
@@ -7310,6 +7308,18 @@ fn thread_store_list_error(err: ThreadStoreError) -> JSONRPCErrorError {
         }
         err => internal_error(format!("failed to list threads: {err}")),
     }
+}
+
+fn stored_thread_for_resume(
+    stored_thread: StoredThread,
+) -> Result<StoredThread, JSONRPCErrorError> {
+    if stored_thread.archived_at.is_some() {
+        let thread_id = stored_thread.thread_id;
+        return Err(invalid_request(format!(
+            "session {thread_id} is archived. Run `codex unarchive {thread_id}` to unarchive it first."
+        )));
+    }
+    Ok(stored_thread)
 }
 
 fn thread_store_resume_read_error(err: ThreadStoreError) -> JSONRPCErrorError {
