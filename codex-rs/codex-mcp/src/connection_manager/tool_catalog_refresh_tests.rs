@@ -17,10 +17,12 @@ async fn fabric_catalog_revision(manager: &McpConnectionSet) -> Option<u64> {
         )
         .await
         .and_then(|revisions| {
-            revisions.get("fabric").map(|revision| match revision {
-                BindingCatalogRevision::Ready(revision) => revision.revision,
-                BindingCatalogRevision::Cached(revision) => *revision,
-            })
+            revisions
+                .get(&McpServerKey::unscoped("fabric"))
+                .map(|revision| match revision {
+                    BindingCatalogRevision::Ready(revision) => revision.revision,
+                    BindingCatalogRevision::Cached(revision) => *revision,
+                })
         })
 }
 
@@ -240,7 +242,7 @@ async fn http_notifications_refresh_model_bindings_and_preserve_server_scope() {
     manager.insert_test_client("other", other.client("other").await);
     manager
         .servers
-        .get_mut("fabric")
+        .get_mut(&McpServerKey::unscoped("fabric"))
         .unwrap()
         .tool_filter
         .disabled
@@ -283,14 +285,32 @@ async fn http_notifications_refresh_model_bindings_and_preserve_server_scope() {
             .is_some_and(|revision| revision >= 1)
     );
     let (after, concurrent) = tokio::join!(capture_binding(&manager), manager.list_all_tools());
-    assert_eq!(after.tool_info("fabric", "same").unwrap().tool, changed);
-    assert!(after.prepare_call("fabric", "added").is_some());
-    assert!(after.prepare_call("fabric", "old").is_none());
-    assert!(after.prepare_call("fabric", "blocked").is_none());
+    assert_eq!(
+        after
+            .tool_info(&McpServerKey::unscoped("fabric"), "same")
+            .unwrap()
+            .tool,
+        changed
+    );
+    assert!(
+        after
+            .prepare_call(&McpServerKey::unscoped("fabric"), "added")
+            .is_some()
+    );
+    assert!(
+        after
+            .prepare_call(&McpServerKey::unscoped("fabric"), "old")
+            .is_none()
+    );
+    assert!(
+        after
+            .prepare_call(&McpServerKey::unscoped("fabric"), "blocked")
+            .is_none()
+    );
     assert!(
         concurrent
             .iter()
-            .any(|tool| tool.server_name == "fabric" && tool.tool.name == "added")
+            .any(|tool| tool.server_name() == "fabric" && tool.tool.name == "added")
     );
     assert_eq!(before.tools(), before_tools);
     assert_eq!(server.lists.load(Ordering::SeqCst), 2);
@@ -299,7 +319,7 @@ async fn http_notifications_refresh_model_bindings_and_preserve_server_scope() {
     assert_eq!(other.initializes.load(Ordering::SeqCst), 1);
     assert!(
         before
-            .prepare_call("fabric", "old")
+            .prepare_call(&McpServerKey::unscoped("fabric"), "old")
             .unwrap()
             .call_with_preparation(
                 /*requested_timeout*/ None,
@@ -345,12 +365,12 @@ async fn http_notifications_refresh_model_bindings_and_preserve_server_scope() {
         unavailable
             .tools()
             .iter()
-            .all(|tool| tool.server_name != "fabric")
+            .all(|tool| tool.server_name() != "fabric")
     );
     assert_eq!(server.lists.load(Ordering::SeqCst), 3);
     assert!(
         after
-            .prepare_call("fabric", "same")
+            .prepare_call(&McpServerKey::unscoped("fabric"), "same")
             .unwrap()
             .call_with_preparation(
                 /*requested_timeout*/ None,
@@ -364,7 +384,11 @@ async fn http_notifications_refresh_model_bindings_and_preserve_server_scope() {
     server.fail_lists.store(false, Ordering::Release);
     tokio::time::sleep(Duration::from_millis(1100)).await;
     let recovered = capture_binding(&manager).await;
-    assert!(recovered.prepare_call("fabric", "recovered").is_some());
+    assert!(
+        recovered
+            .prepare_call(&McpServerKey::unscoped("fabric"), "recovered")
+            .is_some()
+    );
     assert_eq!(server.lists.load(Ordering::SeqCst), 4);
 
     // Identical descriptors still advance the captured generation, so the
@@ -468,7 +492,9 @@ async fn http_catalog_publication_waits_for_inflight_prepared_calls() {
         let manager = Arc::new(manager);
         let before = capture_binding(&manager).await;
         let frozen = before.tools().to_vec();
-        let prepared = before.prepare_call("fabric", "old").unwrap();
+        let prepared = before
+            .prepare_call(&McpServerKey::unscoped("fabric"), "old")
+            .unwrap();
         let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
         let (release_tx, release_rx) = tokio::sync::oneshot::channel();
         let call = tokio::spawn(async move {
@@ -510,8 +536,16 @@ async fn http_catalog_publication_waits_for_inflight_prepared_calls() {
             tokio::task::yield_now().await;
         }
         let after = capture_binding(&manager).await;
-        assert!(after.prepare_call("fabric", "new").is_some());
-        assert!(after.prepare_call("fabric", "old").is_none());
+        assert!(
+            after
+                .prepare_call(&McpServerKey::unscoped("fabric"), "new")
+                .is_some()
+        );
+        assert!(
+            after
+                .prepare_call(&McpServerKey::unscoped("fabric"), "old")
+                .is_none()
+        );
         assert_eq!(before.tools(), frozen);
         assert_eq!(server.initializes.load(Ordering::SeqCst), 1);
     })

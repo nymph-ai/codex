@@ -1205,6 +1205,9 @@ async fn cancelled_reactive_waiter_never_exchanges_tokens() -> Result<()> {
         let manager = match &runtime {
             OAuthRuntime::Legacy(persistor) => &persistor.inner.authorization_manager,
             OAuthRuntime::Coordinated { auth_manager, .. } => auth_manager,
+            OAuthRuntime::DaemonLease { .. } => {
+                anyhow::bail!("local OAuth refresh mode unexpectedly uses a daemon lease")
+            }
         };
         let guard = manager.lock().await;
         let mut refresh = Box::pin(runtime.refresh_access_token("access-token"));
