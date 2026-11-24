@@ -388,7 +388,7 @@ pub(crate) struct McpConnectionSet {
     disabled_servers: Vec<McpServerKey>,
     required_servers: Vec<McpServerKey>,
     optional_startup_deadline: OnceLock<tokio::time::Instant>,
-    tool_catalog_refresh: Mutex<HashMap<String, tool_catalog_refresh::RefreshState>>,
+    tool_catalog_refresh: Mutex<HashMap<McpServerKey, tool_catalog_refresh::RefreshState>>,
     tool_plugin_context: Arc<ToolPluginContext>,
     prefix_mcp_tool_names: bool,
     non_prefixed_mcp_tool_servers: Vec<String>,

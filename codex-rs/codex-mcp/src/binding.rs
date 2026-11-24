@@ -485,7 +485,7 @@ impl PreparedMcpCall {
         if self.tool_list_generation != self.client.client.tool_list_generation() {
             return Err(anyhow::anyhow!(
                 "tool call rejected because the catalog changed after `{}/{tool_name}` was prepared",
-                self.tool_info().server_name
+                server_name
             ));
         }
         let operation =
