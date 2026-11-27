@@ -257,8 +257,8 @@ impl Session {
                     .await
                     .map_err(persisted)?;
                 live_thread.flush().await.map_err(persisted)?;
-                let previous_config = self.build_effective_session_config(previous);
-                let next_config = self.build_effective_session_config(&next);
+                let previous_config = Self::build_effective_session_config(previous);
+                let next_config = Self::build_effective_session_config(&next);
                 state.session_configuration = next.clone();
                 state.last_started_turn_id = None;
                 drop(state);
