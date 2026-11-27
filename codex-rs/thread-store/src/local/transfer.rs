@@ -703,7 +703,7 @@ pub(super) async fn export_thread_archive(
         codex_rollout::RolloutReferenceIndex::scan(store.config.codex_home.as_path())
             .await
             .map_err(|err| internal(format!("failed to scan thread rollout files: {err}")))?;
-    if let Some(child) = reference_index.attached_child(&[thread_id]) {
+    if let Some(child) = reference_index.external_attached_child(&[thread_id]) {
         return Err(invalid(format!(
             "thread {thread_id} has attached thread {child}; thread archives move one thread at a time"
         )));
