@@ -222,6 +222,7 @@ impl CatalogHttpServer {
             codex_apps_tools_cache_context: None,
             tool_catalog_cache_context: None,
             startup_complete: Arc::new(AtomicBool::new(true)),
+            startup_warning_emitted: None,
             startup_reconnect: None,
             connection_slot: None,
             cancel_token: CancellationToken::new(),
