@@ -120,14 +120,16 @@ fn has_original_root_metadata(thread_id: ThreadId, history: &[RolloutItem]) -> b
 fn is_settled_setup_boundary(thread_id: ThreadId, history: &[RolloutItem]) -> bool {
     // A final matching native completion proves a suspension cannot be awaiting continuation.
     // An unprompted root with its own durable setup checkpoint is also a complete boundary.
-    let mut boundary = history.iter().rev().filter_map(|item| match item {
-        RolloutItem::EventMsg(
-            event @ (EventMsg::TurnStarted(_)
-            | EventMsg::TurnComplete(_)
-            | EventMsg::TurnAborted(_)),
-        ) => Some(event),
-        _ => None,
-    });
+    let mut boundary = history
+        .iter()
+        .rev()
+        .filter_map(RolloutItem::event_msg)
+        .filter(|event| {
+            matches!(
+                event,
+                EventMsg::TurnStarted(_) | EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)
+            )
+        });
     match boundary.next() {
         Some(EventMsg::TurnComplete(completed)) => matches!(
             boundary.next(),
@@ -137,9 +139,10 @@ fn is_settled_setup_boundary(thread_id: ThreadId, history: &[RolloutItem]) -> bo
             let mut has_checkpoint = false;
             let pristine = history.iter().all(|item| match item {
                 RolloutItem::SessionMeta(meta) => meta.meta.id == thread_id,
-                RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event))
-                    if event.thread_id == Some(thread_id) =>
-                {
+                RolloutItem::EventMsg {
+                    event: EventMsg::ThreadSettingsApplied(event),
+                    ..
+                } if event.thread_id == Some(thread_id) => {
                     has_checkpoint = true;
                     true
                 }

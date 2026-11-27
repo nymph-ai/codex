@@ -1257,8 +1257,9 @@ impl ThreadRequestProcessor {
                 history: Arc::new(history.items),
                 rollout_path: None,
             });
-            history.resumed_thread_settings().map(|snapshot| {
-                ThreadOptionSettings {
+            history
+                .resumed_thread_settings()
+                .map(|snapshot| ThreadOptionSettings {
                     origin: ThreadSettingsOrigin::Retained,
                     cwd: snapshot.cwd.clone(),
                     model: snapshot.model.clone(),
@@ -1269,8 +1270,7 @@ impl ThreadRequestProcessor {
                     active_permission_profile: thread_response_active_permission_profile(
                         snapshot.active_permission_profile.clone(),
                     ),
-                }
-            })
+                })
         };
         Ok(Some(ThreadSettingsReadResponse { settings }.into()))
     }
